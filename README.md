@@ -1,9 +1,21 @@
-# herdr mods
+# Herdr mods
 
-Community mods for [Herdr](https://herdr.dev), shared at [herdr.dev/mods](https://herdr.dev/mods).
+Personal mods for [Herdr](https://herdr.dev), packaged for the [mods gallery](https://herdr.dev/mods/).
 
-## github-spaces
+## GitHub Spaces
 
-The Spaces sidebar plus GitHub: PR checks as colored marks (failed red, running, passing green, merged purple), comment bubbles, merged-worktree cleanup prompts, and a one-click `git fetch + rebase` beside each space's name. See [github-spaces/RECIPE.md](github-spaces/RECIPE.md).
+Replace the Spaces sidebar with GitHub PR status, comment badges, worktree cleanup prompts, and a fetch/rebase button.
 
-**Install:** copy `github-spaces/mods/github-spaces/` into `~/.config/herdr-app/mods/`, then set your layout's spaces sidebar block to `"content": { "mod": "github-spaces" }`. Requires `gh` (logged in) and `git`.
+- **PR status:** red failed checks, yellow running checks, green passing checks, purple merged PRs.
+- **Branch status:** blue download arrow by default; red arrow and count when strictly behind the configured upstream.
+- **Notifications:** new PR comments and a removal prompt when a worktree's PR merges.
+
+**[Install and use GitHub Spaces →](github-spaces/README.md)**
+
+[Build recipe](github-spaces/RECIPE.md) · [Source](github-spaces/mods/github-spaces/main.js)
+
+Requires Herdr, Git, and an authenticated GitHub CLI (`gh`). Mods run trusted code: this one queries GitHub and runs Git commands.
+
+## Repository layout
+
+Each mod has its own folder containing user documentation, a `RECIPE.md` build brief, a `preview.png`, and `mods/<name>/` installable files. No replacement layout or key bindings are included.

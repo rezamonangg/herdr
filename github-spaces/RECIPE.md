@@ -1,59 +1,98 @@
-# GitHub spaces
+# GitHub Spaces
 
-The Spaces sidebar, plus GitHub: every repo space shows its branch's PR — checks failed red, running, passing green, merged purple — a bubble for comments not read yet, a one-click `git fetch + rebase` beside the name, and when a PR merges, the worktree's removal is offered to you. A drop-in replacement for the shipped `spaces` mod, built by cloning it.
+Build a replacement for Herdr's Spaces sidebar that adds GitHub PR marks, comment badges, merge notifications, and a fetch/rebase button. Preserve the shipped sidebar's machine groups, worktree nesting, navigation, menus, and drag-to-reorder behavior.
 
-![GitHub spaces](preview.png)
+![GitHub Spaces](preview.png)
 
-This file is the brief: enough to build GitHub spaces from an empty folder. The files next to it are one build of it. If they don't work on your Herdr, or you want it different, build it again from here.
+This is a build brief, not an installation guide. See [README.md](README.md) for installation, controls, and limitations. The files beside this recipe are one implementation.
 
 ## What you see
 
-The usual Spaces sidebar: colored avatars, worktrees nested under their main checkout, machine headers, repo · branch · ↑ahead ↓behind after each name. On top of that, for every space inside a git repository:
+- A theme-aware Spaces panel with its existing header, new-space control, machine groups, colored avatars, and scrollable rows.
+- Main rows are 30px high; nested worktree rows are 28px. The original sidebar's compact rail remains available.
+- PR marks replace the branch icon on nested rows and appear after the name on main rows. Tooltips include the PR number.
+- A download-arrow button sits beside each repository space's name. Raw ahead/behind counts remain at the right of the row.
 
-- After the space's name (main-checkout rows) or in place of the branch icon (worktree rows): the PR mark.
-  - `x` in red — the PR's checks failed.
-  - a small spinning ring in yellow — checks still running.
-  - a circle-check in green — checks passing.
-  - a circle-check in purple — the PR merged.
-  - a minus, dim — the PR closed without merging.
-- A speech bubble in the accent color beside the mark while the PR has a comment you haven't read; opening the space reads it.
-- A down-arrow, right of the name: blue by default; red with a bold white behind count in a red badge only when strictly behind the configured upstream (ahead 0). Ahead and behind together means diverged: this may follow a rebase, or independent local and remote commits. The arrow stays blue and the tooltip says `diverged · ↑N ↓N — inspect history before rebase or push`. Blue does not guarantee the branch is up to date. Clicking still runs fetch + rebase; inspect divergent history first. Counts reflect the last fetch, compare against the branch's configured upstream (not the PR's base branch), and do not trigger automatic fetches. While fetching/rebasing, the arrow spins in the accent color. PR marks and red badges use explicit hex colors for visibility.
+| PR state | Mark | Color |
+| --- | --- | --- |
+| Failed checks | Cross | Red `#ef4444` |
+| Running checks | Native spinning ring | Yellow `#eab308` |
+| Passing classification | Circle-check | Green `#22c55e` |
+| Merged | Circle-check | Purple `#a78bfa` |
+| Closed | Minus | Theme dim |
+| No known PR | Original sidebar icon | Unchanged |
 
-Marks carry tooltips: "PR #944 · checks passing". A branch without a PR shows exactly what the shipped sidebar shows (the branch icon on worktree rows, nothing extra on main rows).
+An unread latest comment adds a 12px speech bubble in the theme accent color. PR marks are about 13px; the download arrow is 14px. Strictly behind branches get a red arrow and a 16px-high red pill with a bold white count. Otherwise the arrow uses theme blue.
 
 ## How it behaves
 
-- Every two minutes, each repo space's branch is looked up once with `gh pr view` (one call per place, whether or not the window is in front — marks are there when you come back to look).
-- A PR that merges while you run this: a notification ("PR #944 merged … Delete its worktree?") and, for a linked worktree, Herdr's own Remove-worktree dialog opens (with its uncommitted-changes and unpushed-submodule warnings). Main checkouts get the notification only. Each merged PR asks once, ever — remembered in the mod's `localStorage`.
-- A new comment by anyone but you: one notification (clicking it selects the space) and the bubble until you open that space. Your own comments never notify. The first look at a place is quiet: old merges and old comments never pop up.
-- The sync button runs `git fetch`, then `git rebase` on the branch's own configured upstream, one space at a time. Git's refusals (dirty tree, conflicts mid-rebase, branch without upstream) become an error toast with git's own words — nothing is force-pushed, aborted or thrown away. After a run, every checkout of that repo re-derives its ahead/behind.
-- A machine where `gh` cannot start is skipped for half an hour, then tried again; its spaces simply show no PR marks.
+### Branch and PR lookup
+
+Determine each space's checkout from its first terminal's live folder, falling back to its saved folder. Group linked worktrees by Git's common directory, scoped to the machine.
+
+Read branch and ahead/behind counts with `git status --porcelain=v2 --branch`. Use Git-directory watches and the existing sidebar refresh logic to update local state.
+
+Every two minutes, query known branches with:
+
+```sh
+gh pr view <branch> --json number,state,statusCheckRollup,comments
+```
+
+Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder. Poll even when the window is not focused. If `gh` cannot start, back off that machine for 30 minutes. Known no-PR responses clear the PR mark; other command failures preserve the previous result.
+
+For checks, failure takes priority over running, then passing. The current implementation uses `conclusion`, falling back to `status`. An empty check list falls through to passing; do not describe this as proof that a PR is ready to merge.
+
+### Notifications
+
+The first successful lookup of a place is quiet. Later, a newly observed merge triggers a toast and, for linked worktrees only, opens Herdr's existing `worktree` removal dialog. Record handled PRs in `localStorage` to avoid repeated prompts. Never delete automatically.
+
+Track the latest top-level PR comment's timestamp, author, and first line. New latest comments from someone other than the local `gh` account can trigger one toast and a bubble. Clicking the space row records the comment as read. This is not a complete review or inline-comment feed.
+
+Keep agent status in the existing agents list; do not replace it with PR status.
+
+### Fetch/rebase
+
+- Red means `behind > 0` and `ahead === 0`. Show the behind count in the badge.
+- Ahead and behind together means diverged. Keep the arrow blue and explain in the tooltip: inspect history before rebasing or pushing.
+- Clicking runs `git fetch`, then plain `git rebase` in that checkout. Use its configured upstream, not the PR's base branch.
+- While the mod's operation runs, animate the arrow natively. Show errors in a toast and refresh all checkout counts for that repository afterward.
+- Never push, auto-resolve conflicts, or abort an operation. A conflict can leave rebase paused. External rebases are not detected or animated by the current implementation.
+
+Counts reflect the last fetch. Do not auto-fetch just to refresh the display. Blue is a default, not an assertion that the branch is synchronized.
 
 ## Built from
 
-- **A clone of the shipped `spaces` mod** (`herdr-app do mod.clone '{"name":"spaces","as":"github-spaces"}'`), then these additions to `main.js`:
-  - `readPR(j)`: one `gh pr view --json number,state,statusCheckRollup,comments` answer → checks verdict (any FAILURE/TIMED_OUT/ACTION_REQUIRED/ERROR beats any IN_PROGRESS/QUEUED/PENDING/WAITING/null beats the rest) and the last comment with its author.
-  - `pollPRs(cx)`: the two-minute `cx.timer` (skipped only under headless `check`, where `window()` is null), one `exec("gh", …, { cwd, on })` per place, in-flight deduped; gh's "no pull requests found" / "not a github repository" / "no git remotes found" are remembered as *no PR*, other failures keep the last answer.
-  - `speak(s, key, g)`: state changes → `notify({ title, body, level, action: { name: "space.select", args: { id } } })` and `openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { space, action: "remove" } })`; first looks only seed `localStorage` (`pr.merged.done`, `pr.comment.seen`, `pr.comment.read`).
-  - `prMark(pr, g, t)` / `readPrComments({k, g})` / `fetchButton(w, g, t)` / `fetchRebase(w, cx)`: the row marks, the bubble's read-on-open, and the button (red with `g.behind` beside it; `exec("git", ["fetch"])` then `exec("git", ["rebase"])` with `{ cwd, on }`, then `refreshGit(sameRepo(...))`).
-- **Two icons of its own**, `mods/github-spaces/arrow-down.svg` and `comment.svg` (lucide-style, `stroke="currentColor"`, so `svg(path).text_color()` tints them). Other marks reuse shipped `mods/workspace-chrome/` icons: `x`, `circle-check`, `spinner` (`.spin(900)` while checks run), `minus`.
-- **From `herdr`:** `exec` (gh, git; `on: space.machine` for remote spaces), `notify`, `openOverlay`, `run("space.select")`, `spaces`, `panes`, `theme`, `window`, and `localStorage`.
-- **To install:** copy `mods/github-spaces/` into `~/.config/herdr-app/mods/`, then point your layout's spaces sidebar block at it (`"content": { "mod": "github-spaces" }`). No keys, no other layout changes. Needs `gh` (installed and logged in) and `git`.
+One mod folder, `mods/github-spaces/`, containing `main.js`, `mod.json`, `arrow-down.svg`, and `comment.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block. No layout files or key bindings are shipped.
+
+Start from a clone of Herdr's shipped `spaces` mod. Never edit the shipped original. Reuse its grouping, watchers, menus, and row interactions.
+
+The main paths through `main.js` are:
+
+| Responsibility | Entry points |
+| --- | --- |
+| Checkout state and grouping | `check`, `refreshGit`, `ordered`, `grouped` |
+| PR polling and classification | `pollPRs`, `readPR` |
+| Notifications and remembered state | `speak`, `readPrComments` |
+| Row controls | `prMark`, `fetchButton`, `fetchRebase` |
+
+Use `exec` with `{ cwd, on }` for Git and GitHub CLI commands. Use `notify` for toasts and `openOverlay` for Herdr's removal dialog. Reuse shipped `workspace-chrome` icons where possible; keep only the arrow and comment assets in this mod.
+
+Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(900)` for animation. Persist handled merges and comment timestamps in `localStorage`. Read the installed Herdr guide and generated types before building against its API.
 
 ## Watch out
 
-- `window()` is `null` under `herdr-app check` — return early there, or the check fails before rendering. But don't gate polling on `window().active` ("in front"): a window used in the background never polls and its marks stay empty.
-- The shipped `spaces` mod is read-only and restored on every start: always clone, edit the clone, and let the layout reference the clone's name.
-- `gh pr view` exits 1 for "no PR" and for real errors alike; only its three known "no PR" messages may be remembered as no-PR, or a network hiccup would blank the marks until the next poll.
-- The fetch button lives inside the row's own press/drag/select mouse handlers: `stop_propagation` on both `mouse_down` and `click`, or a rebase also selects the space.
-- Rows are keyed by place, `JSON.stringify([machine, cwd])`: a space whose first terminal `cd`s away is a new place and starts with a quiet first look.
-- Marks are skipped for machines where gh can't start — check `gh auth status` there before wondering why a remote space shows nothing.
+- `window()` is null during headless checks. Skip PR polling there, but do not gate real polling on `window().active`.
+- Never pass `null` to `.child()`. A no-PR row must retain its original icon without crashing the sidebar.
+- Stop mouse propagation on the fetch button so it does not trigger row selection or dragging.
+- Do not retain a callback's `cx`; each callback receives its own.
+- Ahead/behind counts cannot distinguish a completed rebase from independent remote commits. Do not recommend a push based only on those counts.
+- Remote `gh` accounts may differ from the local account used for own-comment filtering. Preserve this limitation in user documentation.
 
 ## Done when
 
-- `node github-spaces/test-branch-status.cjs` passes: real Git history covers up-to-date, strictly behind, ahead-only, and rebased-but-unpushed branches, including their rendered arrow, badge and divergence tooltip.
-- `herdr-app check ~/.config/herdr-app/mods/github-spaces` passes and `herdr-app status` shows no mod errors.
-- A repo space with an open PR shows its mark (tooltip names the PR); a branch without a PR looks like the shipped sidebar.
-- The sync button spins while a fetch/rebase runs, the row's ↓behind updates after, and a dirty tree produces git's own refusal in a toast.
-- Merging a PR while running produces one notification and, on a worktree, the Remove-worktree dialog — exactly once, never again after restart.
-- A comment from another account notifies once and leaves a bubble that clears when the space is opened.
+1. `node github-spaces/test-branch-status.cjs` passes from the repository root. It covers synchronized, behind-only, ahead-only, independently diverged, and rebased-but-unpushed histories.
+2. `herdr-app check <installed-mod-directory>` passes, status reports no errors, and a live screenshot confirms row layout and colors.
+3. PR and no-PR rows both render; worktree nesting, selection, menus, and reordering still work.
+4. Clicking fetch/rebase animates, reports failures, and refreshes counts. A merge prompts once without automatic deletion; new latest comments notify and their bubbles clear on a row click.
+
+Headless checks and branch-state tests do not prove live notification behavior. Exercise those transitions separately before claiming full verification.
