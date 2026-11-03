@@ -500,13 +500,15 @@ export default class Spaces extends View {
 
   // The PR mark: ✗ failed, spinner running, ✓ passing, ● merged (purple), ○
   // closed. A bubble marks a comment not read yet; opening the space reads it.
+  // Marks use explicit colors, not theme ansi: graphite's ansi1 is pink, and
+  // the marks must read at a glance, like the behind badge does.
   prMark(pr, g, t) {
     if (!pr) return null;
     const look = {
-      fail: ["x", t.ansi1, "checks failed"],
-      run: ["spinner", t.ansi3, "checks running"],
-      pass: ["circle-check", t.ansi2, "checks passing"],
-      merged: ["circle-check", t.ansi5, "merged"],
+      fail: ["x", "#ef4444", "checks failed"],
+      run: ["spinner", "#eab308", "checks running"],
+      pass: ["circle-check", "#22c55e", "checks passing"],
+      merged: ["circle-check", "#a78bfa", "merged"],
       closed: ["minus", t.dim, "closed"],
     }[pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.ci];
     const unread = pr.commentAt && pr.commentAt > (this.commentRead[`${g.repo}#${pr.number}`] ?? "") && pr.commentBy !== this.login;
@@ -530,8 +532,9 @@ export default class Spaces extends View {
   }
 
   // The button beside the name: git fetch + rebase, one space at a time. A
-  // down-arrow in red with the count while the branch is behind its upstream
-  // (as of the last fetch anywhere in the repo); dim when up to date.
+  // blue down-arrow when up to date; red, with the count in a red badge,
+  // while the branch is behind its upstream (as of the last fetch anywhere
+  // in the repo).
   fetchButton(w, g, t) {
     const behind = g?.behind ?? 0;
     if (this.rebasing[w.id]) return svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().spin(900).text_color(t.accent);
@@ -540,8 +543,8 @@ export default class Spaces extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); this.fetchRebase(w, cx); })
       .hover((s) => s.bg(t.hover))
       .tooltip(behind > 0 ? `git fetch + rebase · ${behind} behind` : "git fetch + rebase")
-      .child(svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().text_color(behind > 0 ? t.ansi1 : t.dim))
-      .when(behind > 0, (el) => el.child(div().id(`frb-n-${w.id}`).flex().flex_none().items_center().justify_center().h(15).min_w(15).px(4).rounded(8).bg(t.ansi1).text_size(10).font_bold().text_color("#ffffff").child(String(behind))));
+      .child(svg("mods/github-spaces/arrow-down.svg").size(14).flex_none().text_color(behind > 0 ? "#ef4444" : t.ansi4))
+      .when(behind > 0, (el) => el.child(div().id(`frb-n-${w.id}`).flex().flex_none().items_center().justify_center().h(16).min_w(16).px(5).rounded(8).bg("#ef4444").text_size(10.5).font_bold().text_color("#ffffff").child(String(behind))));
   }
 
   // `git rebase` follows the branch's own upstream; a refusal (dirty tree,
