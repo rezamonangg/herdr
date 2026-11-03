@@ -6,7 +6,8 @@
 // On top of that, GitHub (gh): each repo space's PR shows as a mark — checks
 // failed red, running, passing green; merged purple; a bubble for comments not
 // read yet. A merged worktree asks to be deleted; a new comment says so. Beside
-// each repo space's name, a button runs git fetch + rebase on its branch.
+// each repo space's name, a down-arrow button runs git fetch + rebase on its
+// branch, red with a count while it sits behind its upstream.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -434,7 +435,7 @@ export default class Spaces extends View {
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
           .when(!tree && Boolean(this.pr[k]), (el) => el.child(this.prMark(this.pr[k], g, t))) // prMark is null without a PR
-          .when(Boolean(g), (el) => el.child(this.fetchButton(w, t)))
+          .when(Boolean(g), (el) => el.child(this.fetchButton(w, g, t)))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
       );
   }
@@ -528,16 +529,19 @@ export default class Spaces extends View {
     }
   }
 
-  // The button beside the name: git fetch + rebase, one space at a time.
-  fetchButton(w, t) {
-    const mark = svg("mods/github-spaces/sync.svg").size(13).flex_none();
-    if (this.rebasing[w.id]) return mark.spin(900).text_color(t.accent);
-    return div().id(`frb-${w.id}`).flex_none().flex().items_center().rounded(4).cursor_pointer()
+  // The button beside the name: git fetch + rebase, one space at a time. A
+  // down-arrow in red with the count while the branch is behind its upstream
+  // (as of the last fetch anywhere in the repo); dim when up to date.
+  fetchButton(w, g, t) {
+    const behind = g?.behind ?? 0;
+    if (this.rebasing[w.id]) return svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().spin(900).text_color(t.accent);
+    return h_flex().id(`frb-${w.id}`).flex_none().items_center().rounded(4).cursor_pointer().gap(2)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); this.fetchRebase(w, cx); })
       .hover((s) => s.bg(t.hover))
-      .tooltip("git fetch + rebase")
-      .child(mark.text_color(t.dim));
+      .tooltip(behind > 0 ? `git fetch + rebase · ${behind} behind` : "git fetch + rebase")
+      .child(svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().text_color(behind > 0 ? t.ansi1 : t.dim))
+      .when(behind > 0, (el) => el.child(div().text_size(10.5).text_color(t.ansi1).child(String(behind))));
   }
 
   // `git rebase` follows the branch's own upstream; a refusal (dirty tree,

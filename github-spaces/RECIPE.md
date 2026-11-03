@@ -17,7 +17,7 @@ The usual Spaces sidebar: colored avatars, worktrees nested under their main che
   - a circle-check in purple — the PR merged.
   - a minus, dim — the PR closed without merging.
 - A speech bubble in the accent color beside the mark while the PR has a comment you haven't read; opening the space reads it.
-- A sync icon, dim, right of the name: hover highlights it, its tooltip says "git fetch + rebase". While it runs it spins in the accent color.
+- A down-arrow, right of the name: dim when the branch is up to date with its upstream; red with the number of commits behind beside it when it isn't. Hover highlights it, its tooltip says "git fetch + rebase" ("… · N behind" when behind). While a fetch/rebase runs it spins in the accent color. The behind count is as of the last fetch anywhere in the repo — the arrow turning red is the reminder to click.
 
 Marks carry tooltips: "PR #944 · checks passing". A branch without a PR shows exactly what the shipped sidebar shows (the branch icon on worktree rows, nothing extra on main rows).
 
@@ -35,8 +35,8 @@ Marks carry tooltips: "PR #944 · checks passing". A branch without a PR shows e
   - `readPR(j)`: one `gh pr view --json number,state,statusCheckRollup,comments` answer → checks verdict (any FAILURE/TIMED_OUT/ACTION_REQUIRED/ERROR beats any IN_PROGRESS/QUEUED/PENDING/WAITING/null beats the rest) and the last comment with its author.
   - `pollPRs(cx)`: the two-minute `cx.timer` (skipped only under headless `check`, where `window()` is null), one `exec("gh", …, { cwd, on })` per place, in-flight deduped; gh's "no pull requests found" / "not a github repository" / "no git remotes found" are remembered as *no PR*, other failures keep the last answer.
   - `speak(s, key, g)`: state changes → `notify({ title, body, level, action: { name: "space.select", args: { id } } })` and `openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { space, action: "remove" } })`; first looks only seed `localStorage` (`pr.merged.done`, `pr.comment.seen`, `pr.comment.read`).
-  - `prMark(pr, g, t)` / `readPrComments({k, g})` / `fetchButton(w, t)` / `fetchRebase(w, cx)`: the row marks, the bubble's read-on-open, and the button (`exec("git", ["fetch"])` then `exec("git", ["rebase"])` with `{ cwd, on }`, then `refreshGit(sameRepo(...))`).
-- **Two icons of its own**, `mods/github-spaces/sync.svg` and `comment.svg` (lucide-style, `stroke="currentColor"`, so `svg(path).text_color()` tints them). Other marks reuse shipped `mods/workspace-chrome/` icons: `x`, `circle-check`, `spinner` (`.spin(900)` while checks run), `minus`.
+  - `prMark(pr, g, t)` / `readPrComments({k, g})` / `fetchButton(w, g, t)` / `fetchRebase(w, cx)`: the row marks, the bubble's read-on-open, and the button (red with `g.behind` beside it; `exec("git", ["fetch"])` then `exec("git", ["rebase"])` with `{ cwd, on }`, then `refreshGit(sameRepo(...))`).
+- **Two icons of its own**, `mods/github-spaces/arrow-down.svg` and `comment.svg` (lucide-style, `stroke="currentColor"`, so `svg(path).text_color()` tints them). Other marks reuse shipped `mods/workspace-chrome/` icons: `x`, `circle-check`, `spinner` (`.spin(900)` while checks run), `minus`.
 - **From `herdr`:** `exec` (gh, git; `on: space.machine` for remote spaces), `notify`, `openOverlay`, `run("space.select")`, `spaces`, `panes`, `theme`, `window`, and `localStorage`.
 - **To install:** copy `mods/github-spaces/` into `~/.config/herdr-app/mods/`, then point your layout's spaces sidebar block at it (`"content": { "mod": "github-spaces" }`). No keys, no other layout changes. Needs `gh` (installed and logged in) and `git`.
 
