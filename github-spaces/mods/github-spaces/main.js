@@ -533,18 +533,24 @@ export default class Spaces extends View {
 
   // The button beside the name: git fetch + rebase, one space at a time. A
   // blue down-arrow when up to date; red, with the count in a red badge,
-  // while the branch is behind its upstream (as of the last fetch anywhere
-  // in the repo).
+  // only when the branch is strictly behind its upstream (ahead 0) — ahead
+  // and behind together (a rebase done but not pushed, e.g. an agent's
+  // conflict fix) is not "needs rebase"; its tooltip says diverged. The
+  // counts are as of the last fetch anywhere in the repo.
   fetchButton(w, g, t) {
     const behind = g?.behind ?? 0;
-    if (this.rebasing[w.id]) return svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().spin(900).text_color(t.accent);
+    const needs = behind > 0 && (g?.ahead ?? 0) === 0;
+    const tip = needs ? `git fetch + rebase · ${behind} behind`
+      : behind > 0 ? `diverged · ↑${g.ahead} ↓${behind} — push after rebase`
+      : "git fetch + rebase";
+    if (this.rebasing[w.id]) return svg("mods/github-spaces/arrow-down.svg").size(14).flex_none().spin(900).text_color(t.accent);
     return h_flex().id(`frb-${w.id}`).flex_none().items_center().rounded(4).cursor_pointer().gap(2)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); this.fetchRebase(w, cx); })
       .hover((s) => s.bg(t.hover))
-      .tooltip(behind > 0 ? `git fetch + rebase · ${behind} behind` : "git fetch + rebase")
-      .child(svg("mods/github-spaces/arrow-down.svg").size(14).flex_none().text_color(behind > 0 ? "#ef4444" : t.ansi4))
-      .when(behind > 0, (el) => el.child(div().id(`frb-n-${w.id}`).flex().flex_none().items_center().justify_center().h(16).min_w(16).px(5).rounded(8).bg("#ef4444").text_size(10.5).font_bold().text_color("#ffffff").child(String(behind))));
+      .tooltip(tip)
+      .child(svg("mods/github-spaces/arrow-down.svg").size(14).flex_none().text_color(needs ? "#ef4444" : t.ansi4))
+      .when(needs, (el) => el.child(div().id(`frb-n-${w.id}`).flex().flex_none().items_center().justify_center().h(16).min_w(16).px(5).rounded(8).bg("#ef4444").text_size(10.5).font_bold().text_color("#ffffff").child(String(behind))));
   }
 
   // `git rebase` follows the branch's own upstream; a refusal (dirty tree,
