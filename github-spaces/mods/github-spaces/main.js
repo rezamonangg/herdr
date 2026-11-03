@@ -541,7 +541,7 @@ export default class Spaces extends View {
       .hover((s) => s.bg(t.hover))
       .tooltip(behind > 0 ? `git fetch + rebase · ${behind} behind` : "git fetch + rebase")
       .child(svg("mods/github-spaces/arrow-down.svg").size(13).flex_none().text_color(behind > 0 ? t.ansi1 : t.dim))
-      .when(behind > 0, (el) => el.child(div().text_size(10.5).text_color(t.ansi1).child(String(behind))));
+      .when(behind > 0, (el) => el.child(div().id(`frb-n-${w.id}`).flex().flex_none().items_center().justify_center().h(15).min_w(15).px(4).rounded(8).bg(t.ansi1).text_size(10).font_bold().text_color("#ffffff").child(String(behind)))));
   }
 
   // `git rebase` follows the branch's own upstream; a refusal (dirty tree,
