@@ -49,6 +49,7 @@ Herdr reloads saved changes automatically. PR lookups run every two minutes, inc
 
 | Mark | Meaning |
 | --- | --- |
+| Orange crossing-branches icon with an exclamation mark | PR conflicts with its base branch; takes priority over CI |
 | Red cross | Checks failed |
 | Yellow spinner | Checks running or pending |
 | Green circle-check | Checks classified as passing |
@@ -57,6 +58,8 @@ Herdr reloads saved changes automatically. PR lookups run every two minutes, inc
 | Original icon | No known PR for the branch |
 
 Hover a mark for its PR number and status. A bubble marks the latest comment from someone other than the locally authenticated account. Clicking the space row clears it.
+
+Conflict detection uses GitHub's mergeability result, not local ahead/behind counts. If GitHub reports `UNKNOWN`, the usual CI mark remains until a later poll confirms a conflict. Merged and closed marks take priority over conflicts.
 
 ### Fetch/rebase button
 
@@ -73,7 +76,26 @@ The row's `↑N ↓N` values are Git's raw commit counts. They compare local his
 
 ## Notifications and cleanup
 
-- New latest comments can trigger a toast. The first lookup is quiet, so old comments do not trigger notifications.
+### Persistent comment dock
+
+Comments and reviews now appear in a bottom-right card for the selected worktree, not a timed toast. Switching spaces hides the card; returning restores it. Press **×** to dismiss it. Newer activity replaces the dismissed card. State is saved through Herdr's shared storage, including across restarts. The initial lookup can show existing activity as a card.
+
+Add this `floating` property to the active-terminal block in your personal layout:
+
+```json
+"floating": [
+  {
+    "id": "github-spaces-comments",
+    "content": { "mod": "github-spaces", "props": { "role": "comments" } },
+    "edge": "bottom",
+    "align": "end"
+  }
+]
+```
+
+The dock uses `dock.js` in the same mod folder. It does not run a second poller. Closing a card is separate from clearing the sidebar's unread bubble.
+
+- New latest comments update the persistent card. Merge and error notifications retain their existing behavior.
 - A newly observed merge triggers a toast. For a linked worktree, Herdr's existing removal dialog also opens.
 - Removal requires confirmation. The dialog warns about local changes; removal closes the space and deletes the checkout. The branch remains.
 - Previously handled merges are remembered. Main checkouts are never offered for removal by this mod.
@@ -84,7 +106,7 @@ The row's `↑N ↓N` values are Git's raw commit counts. They compare local his
 - **Remote spaces:** Git and `gh` run on that space's machine. If `gh` cannot start, lookups on that machine pause for 30 minutes. Authentication failures also prevent fresh results.
 - **Unexpected grouping:** the mod uses the first terminal's live folder, falling back to the saved folder—not the space's display name.
 - **Checks:** an empty check list currently counts as passing. Green is not a guarantee of merge readiness.
-- **Comments:** only the latest top-level PR comment is tracked, not a complete review or inline-comment feed. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
+- **Comments:** discussion comments, submitted reviews, and inline replies are checked every two minutes. Each poll shows the latest activity from someone else, rather than a separate toast per comment. Edits to existing comments are not tracked. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
 
 This is trusted code: it queries GitHub, reads repository state, and runs Git commands. Status changes alone do not fetch, rebase, push, or remove worktrees. Fetch/rebase requires a click; removal requires confirmation.
 
@@ -99,4 +121,4 @@ node github-spaces/test-branch-status.cjs
 git diff --check
 ```
 
-The regression check uses disposable local Git repositories to verify arrow colors, badges, and divergence text. It does not touch your working branches. Also run Herdr's check on the installed mod and inspect the live sidebar; headless checks do not cover every later render state.
+The regression check verifies PR conflict precedence, review notifications, pagination, duplicate suppression, and unread badges with fixtures. Disposable Git repositories cover arrow colors, badges, and divergence text. It does not touch your working branches. Also run Herdr's check on the installed mod and inspect the live sidebar; headless checks do not cover every later render state.

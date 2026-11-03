@@ -11,18 +11,24 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify } from "herdr";
+import { commentDock } from "./dock.js";
+import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify, props } from "herdr";
 
-// One GitHub look, for `gh pr view --json number,state,statusCheckRollup,comments`:
-// the PR's checks (fail beats running beats pass) and its last comment.
-function readPR(j) {
+// Combine discussion comments, submitted reviews and inline replies into one watermark.
+function readPR(j, login) {
   const roll = (j.statusCheckRollup ?? []).map((c) => c.conclusion ?? c.status);
   const fail = roll.some((c) => ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "ERROR"].includes(c));
   const run = roll.some((c) => c == null || ["IN_PROGRESS", "QUEUED", "PENDING", "WAITING"].includes(c));
-  const last = (j.comments ?? []).filter((c) => c.author?.login).slice(-1)[0];
+  const last = [
+    ...(j.comments ?? []),
+    ...(j.reviews ?? []).map(r => ({ author: r.author, createdAt: r.submittedAt, body: r.body || "New PR review" })),
+    ...(j.reviewComments ?? []).map(c => ({ author: c.user, createdAt: c.created_at, body: c.body })),
+  ].filter(c => c.createdAt && c.author?.login && c.author.login !== login)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-1)[0];
   return {
     number: j.number,
     state: j.state,
+    conflict: j.mergeable === "CONFLICTING",
     ci: fail ? "fail" : run ? "run" : "pass",
     commentAt: last?.createdAt ?? null,
     commentBy: last?.author.login ?? null,
@@ -70,6 +76,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.role === "comments") return;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -440,9 +447,7 @@ export default class Spaces extends View {
       );
   }
 
-  // GitHub PRs of the branches the list shows: one look per place every couple
-  // of minutes, only while the window is in front (a return catches up on the
-  // next tick). A machine where gh can't start is skipped for half an hour.
+  // Poll in background too. A machine where gh can't start backs off for half an hour.
   pollPRs(cx) {
     if (!window()) return; // check() has no window; the real app always polls
     const ps = panes();
@@ -455,10 +460,25 @@ export default class Spaces extends View {
       this.asking.add(key);
       cx.spawn(async (cx) => {
         try {
-          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,state,statusCheckRollup,comments"], { cwd: JSON.parse(key)[1], on });
+          const options = { cwd: JSON.parse(key)[1], on };
+          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,url,state,mergeable,statusCheckRollup,comments,reviews"], options);
           this.ghAway[on] = 0;
-          this.pr[key] = r.code === 0 ? readPR(JSON.parse(r.stdout))
-            : /no pull requests found|not a github repository|no git remotes found/i.test(r.stderr ?? "") ? null : this.pr[key];
+          if (r.code === 0) {
+            const data = JSON.parse(r.stdout);
+            const target = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/\d+$/.exec(data.url ?? "");
+            if (!target) throw new Error("Unrecognized PR URL");
+            const inline = await exec("gh", ["api", "--hostname", target[1],
+              `repos/${target[2]}/pulls/${data.number}/comments?per_page=100`, "--paginate", "--slurp"], options);
+            if (inline.code === 0) data.reviewComments = JSON.parse(inline.stdout).flat();
+            else console.warn(`Couldn't read inline PR comments: ${inline.stderr}`);
+            const next = readPR(data, this.login);
+            const old = this.pr[key];
+            // A partial API failure must not clear an unread inline comment.
+            if (inline.code !== 0 && old?.commentAt && old.commentAt > (next.commentAt ?? "")) {
+              next.commentAt = old.commentAt; next.commentBy = old.commentBy; next.commentHead = old.commentHead;
+            }
+            this.pr[key] = next;
+          } else if (/no pull requests found|not a github repository|no git remotes found/i.test(r.stderr ?? "")) this.pr[key] = null;
           if (this.pr[key] !== undefined) this.speak(s, key, g);
         } catch {
           this.ghAway[on] = Date.now(); // gh not installed there, or the machine away
@@ -478,6 +498,16 @@ export default class Spaces extends View {
     this.prSeen.add(key);
     if (!pr) return;
     const id = `${g.repo}#${pr.number}`;
+    if (pr.commentAt && pr.commentBy !== this.login) {
+      const cards = shared("github-spaces.comments") ?? {};
+      const old = cards[s.id];
+      if (!old || old.at !== pr.commentAt || old.pr !== id) {
+        setShared("github-spaces.comments", { ...cards, [s.id]: {
+          pr: id, at: pr.commentAt, title: `PR #${pr.number} · ${s.name}`,
+          body: `${pr.commentBy}: ${pr.commentHead}`, dismissed: false,
+        } });
+      }
+    }
     if (pr.state === "MERGED" && !this.mergedDone.has(id)) {
       this.mergedDone.add(id);
       localStorage.setItem("pr.merged.done", JSON.stringify([...this.mergedDone]));
@@ -494,7 +524,6 @@ export default class Spaces extends View {
     if (pr.commentAt && pr.commentBy !== this.login && pr.commentAt > (this.commentSeen[id] ?? "")) {
       this.commentSeen[id] = pr.commentAt;
       localStorage.setItem("pr.comment.seen", JSON.stringify(this.commentSeen));
-      if (!first) notify({ title: `Comment on PR #${pr.number} · ${s.name}`, body: `${pr.commentBy}: ${pr.commentHead}`, action: { name: "space.select", args: { id: s.id } } });
     }
   }
 
@@ -504,19 +533,21 @@ export default class Spaces extends View {
   // the marks must read at a glance, like the behind badge does.
   prMark(pr, g, t) {
     if (!pr) return null;
+    const status = pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.conflict ? "conflict" : pr.ci;
     const look = {
+      conflict: ["conflict", "#f97316", "merge conflicts with base branch"],
       fail: ["x", "#ef4444", "checks failed"],
       run: ["spinner", "#eab308", "checks running"],
       pass: ["circle-check", "#22c55e", "checks passing"],
       merged: ["circle-check", "#a78bfa", "merged"],
       closed: ["minus", t.dim, "closed"],
-    }[pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.ci];
+    }[status];
     const unread = pr.commentAt && pr.commentAt > (this.commentRead[`${g.repo}#${pr.number}`] ?? "") && pr.commentBy !== this.login;
     return h_flex().id(`pr-${pr.number}`).gap(4).items_center().flex_none()
       .tooltip(`PR #${pr.number} · ${look[2]}`)
-      .child(pr.ci === "run" && pr.state === "OPEN"
-        ? svg(`mods/workspace-chrome/${look[0]}.svg`).size(12).flex_none().spin(900).text_color(look[1])
-        : svg(`mods/workspace-chrome/${look[0]}.svg`).size(13).flex_none().text_color(look[1]))
+      .child(svg(status === "conflict" ? "mods/github-spaces/conflict.svg" : `mods/workspace-chrome/${look[0]}.svg`)
+        .size(status === "run" ? 12 : 13).flex_none().text_color(look[1])
+        .when(status === "run", el => el.spin(900)))
       .when(Boolean(unread), (el) => el.child(svg("mods/github-spaces/comment.svg").size(12).flex_none().text_color(t.accent).tooltip(`${pr.commentBy} commented`)));
   }
 
@@ -592,6 +623,7 @@ export default class Spaces extends View {
   }
 
   render() {
+    if (props()?.role === "comments") return commentDock();
     const t = theme();
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];

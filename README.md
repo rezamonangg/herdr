@@ -6,7 +6,7 @@ Personal mods for [Herdr](https://herdr.dev), packaged for the [mods gallery](ht
 
 Replace the Spaces sidebar with GitHub PR status, comment badges, worktree cleanup prompts, and a fetch/rebase button.
 
-- **PR status:** red failed checks, yellow running checks, green passing checks, purple merged PRs.
+- **PR status:** orange merge conflicts, red failed checks, yellow running checks, green passing checks, purple merged PRs.
 - **Branch status:** blue download arrow by default; red arrow and count when strictly behind the configured upstream.
 - **Notifications:** new PR comments and a removal prompt when a worktree's PR merges.
 

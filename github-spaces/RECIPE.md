@@ -15,6 +15,7 @@ This is a build brief, not an installation guide. See [README.md](README.md) for
 
 | PR state | Mark | Color |
 | --- | --- | --- |
+| Open PR with confirmed merge conflicts | Crossing branches with exclamation mark | Orange `#f97316` |
 | Failed checks | Cross | Red `#ef4444` |
 | Running checks | Native spinning ring | Yellow `#eab308` |
 | Passing classification | Circle-check | Green `#22c55e` |
@@ -35,18 +36,24 @@ Read branch and ahead/behind counts with `git status --porcelain=v2 --branch`. U
 Every two minutes, query known branches with:
 
 ```sh
-gh pr view <branch> --json number,state,statusCheckRollup,comments
+gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,comments,reviews
 ```
 
 Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder. Poll even when the window is not focused. If `gh` cannot start, back off that machine for 30 minutes. Known no-PR responses clear the PR mark; other command failures preserve the previous result.
 
 For checks, failure takes priority over running, then passing. The current implementation uses `conclusion`, falling back to `status`. An empty check list falls through to passing; do not describe this as proof that a PR is ready to merge.
 
+For open PRs, `mergeable: "CONFLICTING"` overrides the CI mark with the orange conflict icon and a merge-conflict tooltip. Do not treat `UNKNOWN` as a conflict. Merged and closed marks take priority. Restore the CI mark when GitHub no longer reports conflicts.
+
 ### Notifications
+
+Comment notifications use the persistent worktree-scoped dock described in [README.md](README.md), replacing comment toasts. Add `dock.js` to the mod folder. The sidebar writes the latest activity per space into shared `github-spaces.comments` state. A second copy of the same mod, with `props.role: "comments"`, renders only the selected space's card and never initializes polling. Attach it as a floating block with `edge: "bottom"`, `align: "end"` to the active-terminal block. Dismissal is saved with the activity timestamp; only newer activity reopens the card. The initial lookup can populate a card without a toast. This overrides the older comment-toast behavior below; merge dialogs remain unchanged.
 
 The first successful lookup of a place is quiet. Later, a newly observed merge triggers a toast and, for linked worktrees only, opens Herdr's existing `worktree` removal dialog. Record handled PRs in `localStorage` to avoid repeated prompts. Never delete automatically.
 
-Track the latest top-level PR comment's timestamp, author, and first line. New latest comments from someone other than the local `gh` account can trigger one toast and a bubble. Clicking the space row records the comment as read. This is not a complete review or inline-comment feed.
+Also fetch inline comments using `gh api repos/<owner>/<repo>/pulls/<number>/comments?per_page=100 --paginate --slurp`, with the host and repository from the PR URL. Combine discussion comments, submitted reviews, and inline replies by creation/submission time. Ignore pending reviews and the local `gh` account's own activity before choosing the latest event. A blank submitted review still counts as activity. Preserve the previous unread inline event if that API request fails.
+
+New latest activity updates the persistent card and sidebar bubble. Clicking the space row clears the bubble; dismissing the card is a separate action. Do not reopen dismissed activity with the same timestamp; edits are not tracked.
 
 Keep agent status in the existing agents list; do not replace it with PR status.
 
@@ -62,7 +69,7 @@ Counts reflect the last fetch. Do not auto-fetch just to refresh the display. Bl
 
 ## Built from
 
-One mod folder, `mods/github-spaces/`, containing `main.js`, `mod.json`, `arrow-down.svg`, and `comment.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block. No layout files or key bindings are shipped.
+One mod folder, `mods/github-spaces/`, containing `main.js`, `mod.json`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block. No layout files or key bindings are shipped.
 
 Start from a clone of Herdr's shipped `spaces` mod. Never edit the shipped original. Reuse its grouping, watchers, menus, and row interactions.
 
@@ -75,7 +82,7 @@ The main paths through `main.js` are:
 | Notifications and remembered state | `speak`, `readPrComments` |
 | Row controls | `prMark`, `fetchButton`, `fetchRebase` |
 
-Use `exec` with `{ cwd, on }` for Git and GitHub CLI commands. Use `notify` for toasts and `openOverlay` for Herdr's removal dialog. Reuse shipped `workspace-chrome` icons where possible; keep only the arrow and comment assets in this mod.
+Use `exec` with `{ cwd, on }` for Git and GitHub CLI commands. Use `notify` for toasts and `openOverlay` for Herdr's removal dialog. Reuse shipped `workspace-chrome` icons where possible; keep the arrow, comment, and conflict assets in this mod.
 
 Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(900)` for animation. Persist handled merges and comment timestamps in `localStorage`. Read the installed Herdr guide and generated types before building against its API.
 
