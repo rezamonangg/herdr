@@ -17,7 +17,7 @@ The usual Spaces sidebar: colored avatars, worktrees nested under their main che
   - a circle-check in purple — the PR merged.
   - a minus, dim — the PR closed without merging.
 - A speech bubble in the accent color beside the mark while the PR has a comment you haven't read; opening the space reads it.
-- A down-arrow, right of the name: blue when the branch is up to date with its upstream; red with the behind count in a red badge (bold white number) beside it only when the branch is *strictly* behind (ahead 0) — that's "needs rebase". Ahead and behind together means diverged (a rebase done but not pushed, e.g. an agent's conflict fix): the arrow stays blue and the tooltip says `diverged · ↑N ↓N — push after rebase`. Hover highlights it, its tooltip says "git fetch + rebase" ("… · N behind" when behind). While a fetch/rebase runs it spins in the accent color. The behind count is as of the last fetch anywhere in the repo — the arrow turning red is the reminder to click. The PR marks and this red use explicit hex colors (#ef4444 and friends), not theme ansi: graphite's ansi1 is pink, and the marks must read at a glance.
+- A down-arrow, right of the name: blue by default; red with a bold white behind count in a red badge only when strictly behind the configured upstream (ahead 0). Ahead and behind together means diverged: this may follow a rebase, or independent local and remote commits. The arrow stays blue and the tooltip says `diverged · ↑N ↓N — inspect history before rebase or push`. Blue does not guarantee the branch is up to date. Clicking still runs fetch + rebase; inspect divergent history first. Counts reflect the last fetch, compare against the branch's configured upstream (not the PR's base branch), and do not trigger automatic fetches. While fetching/rebasing, the arrow spins in the accent color. PR marks and red badges use explicit hex colors for visibility.
 
 Marks carry tooltips: "PR #944 · checks passing". A branch without a PR shows exactly what the shipped sidebar shows (the branch icon on worktree rows, nothing extra on main rows).
 
@@ -51,6 +51,7 @@ Marks carry tooltips: "PR #944 · checks passing". A branch without a PR shows e
 
 ## Done when
 
+- `node github-spaces/test-branch-status.cjs` passes: real Git history covers up-to-date, strictly behind, ahead-only, and rebased-but-unpushed branches, including their rendered arrow, badge and divergence tooltip.
 - `herdr-app check ~/.config/herdr-app/mods/github-spaces` passes and `herdr-app status` shows no mod errors.
 - A repo space with an open PR shows its mark (tooltip names the PR); a branch without a PR looks like the shipped sidebar.
 - The sync button spins while a fetch/rebase runs, the row's ↓behind updates after, and a dirty tree produces git's own refusal in a toast.

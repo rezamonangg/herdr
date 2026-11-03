@@ -531,17 +531,13 @@ export default class Spaces extends View {
     }
   }
 
-  // The button beside the name: git fetch + rebase, one space at a time. A
-  // blue down-arrow when up to date; red, with the count in a red badge,
-  // only when the branch is strictly behind its upstream (ahead 0) — ahead
-  // and behind together (a rebase done but not pushed, e.g. an agent's
-  // conflict fix) is not "needs rebase"; its tooltip says diverged. The
-  // counts are as of the last fetch anywhere in the repo.
+  // Only strictly behind is red; divergence may be a rebase or new remote
+  // commits, so counts alone cannot recommend rebasing or pushing.
   fetchButton(w, g, t) {
     const behind = g?.behind ?? 0;
     const needs = behind > 0 && (g?.ahead ?? 0) === 0;
     const tip = needs ? `git fetch + rebase · ${behind} behind`
-      : behind > 0 ? `diverged · ↑${g.ahead} ↓${behind} — push after rebase`
+      : behind > 0 ? `diverged · ↑${g.ahead} ↓${behind} — inspect history before rebase or push`
       : "git fetch + rebase";
     if (this.rebasing[w.id]) return svg("mods/github-spaces/arrow-down.svg").size(14).flex_none().spin(900).text_color(t.accent);
     return h_flex().id(`frb-${w.id}`).flex_none().items_center().rounded(4).cursor_pointer().gap(2)
