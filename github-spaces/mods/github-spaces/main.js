@@ -443,7 +443,7 @@ export default class Spaces extends View {
   // of minutes, only while the window is in front (a return catches up on the
   // next tick). A machine where gh can't start is skipped for half an hour.
   pollPRs(cx) {
-    if (window()?.active !== true) return; // check() has no window; away windows catch up on a later tick
+    if (!window()) return; // check() has no window; the real app always polls
     const ps = panes();
     for (const s of spaces()) {
       const key = where(s, ps);
