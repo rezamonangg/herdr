@@ -541,33 +541,31 @@ export default class Spaces extends View {
     this.prSeen.add(key);
     if (!pr) return;
     const id = `${g.repo}#${pr.number}`;
-    if (pr.comments?.length) {
-      const cards = shared("github-spaces.comments") ?? {};
-      const old = cards[s.id];
-      const revision = pr.comments.map(c => c.id).join("\n");
-      // Attention ids refresh every poll (resolution changes them without a
-      // new comment list); per-comment dismissal is carried over. A legacy
-      // whole-dock "dismissed" closes everything that list knew.
-      if (!old || old.pr !== id || old.revision !== revision
-        || JSON.stringify(old.attentionIds ?? []) !== JSON.stringify(pr.attentionIds ?? [])) {
-        // Toast for pending comments missing from the saved list; no saved list (first install) means no toast.
-        const known = new Set((old?.comments ?? []).map(c => c.id));
-        const fresh = old?.pr === id
-          ? pr.comments.filter(c => !known.has(c.id) && (pr.attentionIds ?? []).includes(c.id)) : [];
-        if (fresh.length) notify({
-          title: `PR #${pr.number}: ${fresh[0].author} commented`,
-          body: fresh.length > 1 ? `${fresh.length} new comments in ${s.name}` : `${s.name}: ${fresh[0].body.split("\n")[0].slice(0, 120)}`,
-          level: "info",
-          action: { name: "space.select", args: { id: s.id } },
-        });
-        const legacy = Array.isArray(old?.dismissedIds) ? old.dismissedIds
-          : old?.dismissed ? (old.comments ?? []).map(c => c.id) : [];
-        setShared("github-spaces.comments", { ...cards, [s.id]: {
-          pr: id, at: pr.comments[0].at, revision, title: `PR #${pr.number} · ${s.name}`,
-          comments: pr.comments, attentionIds: pr.attentionIds ?? [],
-          dismissedIds: [...new Set(legacy.filter(i => pr.comments.some(c => c.id === i)))],
-        } });
-      }
+    const cards = shared("github-spaces.comments") ?? {};
+    const old = cards[s.id];
+    const revision = pr.comments.map(c => c.id).join("\n");
+    // Attention ids refresh every poll (resolution changes them without a
+    // new comment list); per-comment dismissal is carried over. A legacy
+    // whole-dock "dismissed" closes everything that list knew.
+    if (!old || old.pr !== id || old.revision !== revision
+      || JSON.stringify(old.attentionIds ?? []) !== JSON.stringify(pr.attentionIds ?? [])) {
+      // Toast for pending comments missing from the saved list; no saved list (first install) means no toast.
+      const known = new Set((old?.comments ?? []).map(c => c.id));
+      const fresh = old?.pr === id
+        ? pr.comments.filter(c => !known.has(c.id) && (pr.attentionIds ?? []).includes(c.id)) : [];
+      if (fresh.length) notify({
+        title: `PR #${pr.number}: ${fresh[0].author} commented`,
+        body: fresh.length > 1 ? `${fresh.length} new comments in ${s.name}` : `${s.name}: ${fresh[0].body.split("\n")[0].slice(0, 120)}`,
+        level: "info",
+        action: { name: "space.select", args: { id: s.id } },
+      });
+      const legacy = Array.isArray(old?.dismissedIds) ? old.dismissedIds
+        : old?.dismissed ? (old.comments ?? []).map(c => c.id) : [];
+      setShared("github-spaces.comments", { ...cards, [s.id]: {
+        pr: id, at: pr.comments[0]?.at ?? "", revision, title: `PR #${pr.number} · ${s.name}`,
+        comments: pr.comments, attentionIds: pr.attentionIds ?? [],
+        dismissedIds: [...new Set(legacy.filter(i => pr.comments.some(c => c.id === i)))],
+      } });
     }
     if (pr.state === "MERGED" && !this.mergedDone.has(id)) {
       this.mergedDone.add(id);

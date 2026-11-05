@@ -144,6 +144,14 @@ async function main() {
     view.speak(space, 'test', repo);
     assert.equal(cardsWritten.length, written, 'repeat poll does not rewrite the card');
     assert.equal(toasts.length, 0, 'comments never create transient toasts');
+    // A PR with no comments yet has no saved card; its first comment must still notify.
+    const quiet = { id: 'quiet', name: 'quiet' };
+    view.pr.quiet = readPR({ ...fixture, comments: [], reviewComments: [] }, view.login);
+    view.speak(quiet, 'quiet', repo);
+    const quietToasts = toasts.length;
+    view.pr.quiet = readPR({ ...fixture, comments: [comment(50, '2026-11-03T18:00:00Z')], reviewComments: [] }, view.login);
+    view.speak(quiet, 'quiet', repo);
+    assert.equal(toasts.length, quietToasts + 1, 'the first comment on a comment-free PR notifies');
     const key = JSON.stringify([null, cwd]);
     polledSpaces.push({ ...space, folder: cwd });
     view.git[key] = { ...repo, branch: 'feature' };
