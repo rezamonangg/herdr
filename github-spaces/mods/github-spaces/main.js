@@ -5,7 +5,7 @@
 //
 // On top of that, GitHub (gh): each repo space's PR shows as a mark — checks
 // failed red, running, passing green; merged purple; a bubble for comments not
-// needing attention. A merged worktree asks to be deleted; comments stay docked. Beside
+// needing attention. A merged worktree asks to be deleted; comments stay docked and notify once. Beside
 // each repo space's name, a down-arrow button runs git fetch + rebase on its
 // branch, red with a count while it sits behind its upstream.
 
@@ -548,6 +548,16 @@ export default class Spaces extends View {
       // whole-dock "dismissed" closes everything that list knew.
       if (!old || old.pr !== id || old.revision !== revision
         || JSON.stringify(old.attentionIds ?? []) !== JSON.stringify(pr.attentionIds ?? [])) {
+        // Toast for pending comments that weren't in the last list (never on the first look).
+        const known = new Set((old?.comments ?? []).map(c => c.id));
+        const fresh = old?.pr === id && !first
+          ? pr.comments.filter(c => !known.has(c.id) && (pr.attentionIds ?? []).includes(c.id)) : [];
+        if (fresh.length) notify({
+          title: `PR #${pr.number}: ${fresh[0].author} commented`,
+          body: fresh.length > 1 ? `${fresh.length} new comments in ${s.name}` : `${s.name}: ${fresh[0].body.split("\n")[0].slice(0, 120)}`,
+          level: "info",
+          action: { name: "space.select", args: { id: s.id } },
+        });
         const legacy = Array.isArray(old?.dismissedIds) ? old.dismissedIds
           : old?.dismissed ? (old.comments ?? []).map(c => c.id) : [];
         setShared("github-spaces.comments", { ...cards, [s.id]: {

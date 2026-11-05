@@ -215,8 +215,13 @@ async function main() {
     view.speak(space, key, repo);
     assert.equal(shown(), 4, 'repeat poll does not reopen a closed comment');
     fixture.comments.push(comment(9, '2026-11-03T12:00:00Z'));
+    const toasted = toasts.length;
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
     assert.equal(view.pr[key].commentCount, 9, 'new feedback raises the raw count');
+    assert.equal(toasts.length, toasted + 1, 'a new human comment notifies once');
+    assert.match(toasts.at(-1).title, /commented/);
+    assert.match(toasts.at(-1).body, /Comment 9/, 'the toast names the new comment');
+    assert.equal(toasts.at(-1).action.args.id, 'test', 'the toast opens the space');
     assert.equal(badgeOf().items[1].items[0], '8', 'new feedback counts, closed comments do not return');
     closeTop();
     assert.equal(badgeOf().items[1].items[0], '7', 'closing the newest pending card lowers the badge');

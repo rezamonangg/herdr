@@ -47,7 +47,7 @@ For open PRs, `mergeable: "CONFLICTING"` overrides the CI mark with the orange c
 
 ### Notifications
 
-Comment notifications use the persistent worktree-scoped comment cards described in [README.md](README.md), replacing comment toasts. The sidebar saves the latest five human comments per space in shared `github-spaces.comments` state, with `attentionIds` (pending comments) and `dismissedIds` (cards the person closed). Five extra copies of the same mod, with `props: { role: "comment", slot: 0..4 }`, each render one card for the selected space and never initialize polling. Attach them as floating blocks with `edge: "bottom"`, `align: "end"` to the work-area node — attaching it to the terminal block covers the terminal's status line.
+Comment notifications use the persistent worktree-scoped comment cards described in [README.md](README.md), plus one Herdr toast per newly seen pending human comment (click selects the space; never on a space's first lookup). The sidebar saves the latest five human comments per space in shared `github-spaces.comments` state, with `attentionIds` (pending comments) and `dismissedIds` (cards the person closed). Five extra copies of the same mod, with `props: { role: "comment", slot: 0..4 }`, each render one card for the selected space and never initialize polling. Attach them as floating blocks with `edge: "bottom"`, `align: "end"` to the work-area node — attaching it to the terminal block covers the terminal's status line.
 
 `dock.js` exports `commentCard(slot)`: a 360px-wide card (author, UTC time, 300-character preview, bottom-right GitHub link, × close). A slot past the last visible comment returns an empty div, so its block collapses. Open links through the click callback's `cx.open_url`; never through a shell.
 
