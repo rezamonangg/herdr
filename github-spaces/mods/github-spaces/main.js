@@ -37,7 +37,7 @@ function readPR(j, login) {
       ...c, author: c.user, createdAt: c.created_at, url: c.html_url,
       resolved: resolved.get(c.in_reply_to_id ?? c.id) === true,
     })),
-  ].filter(c => c.createdAt && c.author?.login && c.author.login !== login
+  ].filter(c => c.createdAt && c.author?.login && c.author.login !== login && c.author.login !== j.author?.login
     && c.author.type !== "Bot" && c.author.is_bot !== true && !/bot/i.test(c.author.login))
     .map(c => ({
       id: c.url || `${c.id ?? c.author.login}:${c.createdAt}`,

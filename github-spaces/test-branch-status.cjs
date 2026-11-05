@@ -116,6 +116,8 @@ async function main() {
       assert.equal(pr.comments.length, name.includes('bot') ? 0 : 1, `${name}: dock excludes bots but keeps resolved human history`);
       console.log(`PASS ${name}`);
     }
+    pr = readPR({ ...feedback, author: { login: 'reviewer' } }, 'me');
+    assert.equal(pr.commentCount + pr.comments.length, 0, "the PR creator's own comments never count or show");
     const resolved = { reviewThreads: [{ isResolved: true, comments: { nodes: [{ databaseId: 42 }] } }] };
     pr = readPR({ ...feedback, ...resolved, reviewComments: [inline, { ...inline, id: 43, in_reply_to_id: 42 }] }, 'me');
     assert.equal(pr.commentCount, 0, 'thread resolution covers inline replies');
