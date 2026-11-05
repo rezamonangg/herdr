@@ -57,7 +57,9 @@ Herdr reloads saved changes automatically. PR lookups run every two minutes, inc
 | Grey minus | PR closed without merging |
 | Original icon | No known PR for the branch |
 
-Hover a mark for its PR number and status. A bubble marks the latest comment from someone other than the locally authenticated account. Clicking the space row clears it.
+Hover a mark for its PR number and status. **💬 N** counts pending human comments, including comments older than the five shown as cards.
+
+Four things lower the count: GitHub review threads resolving, you closing that comment's card, the PR closing/merging, or **a commit pushed after the comment** (only comments newer than the PR's latest commit count; the cards stay). Opening the space or following a link changes nothing. Comments beyond the latest five cannot be closed from a card; they leave the count only through resolution. Bot accounts never count.
 
 Conflict detection uses GitHub's mergeability result, not local ahead/behind counts. If GitHub reports `UNKNOWN`, the usual CI mark remains until a later poll confirms a conflict. Merged and closed marks take priority over conflicts.
 
@@ -76,24 +78,22 @@ The row's `↑N ↓N` values are Git's raw commit counts. They compare local his
 
 ## Notifications and cleanup
 
-### Persistent comment dock
+### Persistent comment cards
 
-Comments and reviews now appear in a bottom-right card for the selected worktree, not a timed toast. Switching spaces hides the card; returning restores it. Press **×** to dismiss it. Newer activity replaces the dismissed card. State is saved through Herdr's shared storage, including across restarts. The initial lookup can show existing activity as a card.
+Each human comment on the selected worktree's PR is its own floating block (newest = slot 0): author, UTC timestamp, up to 300 characters, and a **View on GitHub ↗** link. Every card has its own frame and drag spot, so dragging one moves only that card. Up to five cards show; unused slots render nothing and collapse.
 
-Add this `floating` property to the active-terminal block in your personal layout:
+Press **×** to close a card — the sidebar count drops by one. Closing never removes it from GitHub. Switching worktrees swaps the cards; returning restores them. Shared storage preserves closed cards across restarts.
+
+Add five `floating` entries (slot 0–4) to the work-area block in your personal layout:
 
 ```json
 "floating": [
-  {
-    "id": "github-spaces-comments",
-    "content": { "mod": "github-spaces", "props": { "role": "comments" } },
-    "edge": "bottom",
-    "align": "end"
-  }
+  { "id": "github-spaces-comment-0", "content": { "mod": "github-spaces", "props": { "role": "comment", "slot": 0 } }, "edge": "bottom", "align": "end" },
+  { "id": "github-spaces-comment-1", "content": { "mod": "github-spaces", "props": { "role": "comment", "slot": 1 } }, "edge": "bottom", "align": "end" }
 ]
 ```
 
-The dock uses `dock.js` in the same mod folder. It does not run a second poller. Closing a card is separate from clearing the sidebar's unread bubble.
+(…and likewise slots 2, 3, 4.) The cards use `dock.js` in the same mod folder. It does not run a second poller. Attach the floating block to the work area (above the status bar), not the terminal block, or it covers the terminal's status line.
 
 - New latest comments update the persistent card. Merge and error notifications retain their existing behavior.
 - A newly observed merge triggers a toast. For a linked worktree, Herdr's existing removal dialog also opens.
@@ -106,7 +106,7 @@ The dock uses `dock.js` in the same mod folder. It does not run a second poller.
 - **Remote spaces:** Git and `gh` run on that space's machine. If `gh` cannot start, lookups on that machine pause for 30 minutes. Authentication failures also prevent fresh results.
 - **Unexpected grouping:** the mod uses the first terminal's live folder, falling back to the saved folder—not the space's display name.
 - **Checks:** an empty check list currently counts as passing. Green is not a guarantee of merge readiness.
-- **Comments:** discussion comments, submitted reviews, and inline replies are checked every two minutes. Each poll shows the latest activity from someone else, rather than a separate toast per comment. Edits to existing comments are not tracked. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
+- **Comments:** discussion comments, nonempty submitted review summaries, and inline replies are checked every two minutes. Bot accounts, usernames containing `bot` (case-insensitive), and your own account's comments are excluded from both cards and badge. A commit newer than a comment clears it from the badge (cards remain). Edits are not tracked. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
 
 This is trusted code: it queries GitHub, reads repository state, and runs Git commands. Status changes alone do not fetch, rebase, push, or remove worktrees. Fetch/rebase requires a click; removal requires confirmation.
 
@@ -121,4 +121,4 @@ node github-spaces/test-branch-status.cjs
 git diff --check
 ```
 
-The regression check verifies PR conflict precedence, review notifications, pagination, duplicate suppression, and unread badges with fixtures. Disposable Git repositories cover arrow colors, badges, and divergence text. It does not touch your working branches. Also run Herdr's check on the installed mod and inspect the live sidebar; headless checks do not cover every later render state.
+The regression check verifies conflict precedence, five-comment ordering, bot filtering, attention counts, resolution, author commits, links, pagination, partial API failures, and explicit dock dismissal. Disposable Git repositories cover branch arrows and divergence. It does not touch your working branches. Also run Herdr's check on the installed mod and inspect the live sidebar; headless checks do not cover every later render state.

@@ -8,7 +8,7 @@ Replace the Spaces sidebar with GitHub PR status, comment badges, worktree clean
 
 - **PR status:** orange merge conflicts, red failed checks, yellow running checks, green passing checks, purple merged PRs.
 - **Branch status:** blue download arrow by default; red arrow and count when strictly behind the configured upstream.
-- **Notifications:** new PR comments and a removal prompt when a worktree's PR merges.
+- **Feedback:** a human-comment count and persistent latest-five dock with GitHub links; a removal prompt when a worktree's PR merges.
 
 **[Install and use GitHub Spaces →](github-spaces/README.md)**
 

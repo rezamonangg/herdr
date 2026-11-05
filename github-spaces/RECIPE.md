@@ -23,7 +23,7 @@ This is a build brief, not an installation guide. See [README.md](README.md) for
 | Closed | Minus | Theme dim |
 | No known PR | Original sidebar icon | Unchanged |
 
-An unread latest comment adds a 12px speech bubble in the theme accent color. PR marks are about 13px; the download arrow is 14px. Strictly behind branches get a red arrow and a 16px-high red pill with a bold white count. Otherwise the arrow uses theme blue.
+Pending human feedback adds a 12px speech bubble and bold count in the theme accent color. The count covers all pending comments, not only the five cards. PR marks are about 13px; the download arrow is 14px. Strictly behind branches get a red arrow and a 16px-high red pill with a bold white count. Otherwise the arrow uses theme blue.
 
 ## How it behaves
 
@@ -36,7 +36,7 @@ Read branch and ahead/behind counts with `git status --porcelain=v2 --branch`. U
 Every two minutes, query known branches with:
 
 ```sh
-gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,comments,reviews
+gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,author
 ```
 
 Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder. Poll even when the window is not focused. If `gh` cannot start, back off that machine for 30 minutes. Known no-PR responses clear the PR mark; other command failures preserve the previous result.
@@ -47,13 +47,23 @@ For open PRs, `mergeable: "CONFLICTING"` overrides the CI mark with the orange c
 
 ### Notifications
 
-Comment notifications use the persistent worktree-scoped dock described in [README.md](README.md), replacing comment toasts. Add `dock.js` to the mod folder. The sidebar writes the latest activity per space into shared `github-spaces.comments` state. A second copy of the same mod, with `props.role: "comments"`, renders only the selected space's card and never initializes polling. Attach it as a floating block with `edge: "bottom"`, `align: "end"` to the active-terminal block. Dismissal is saved with the activity timestamp; only newer activity reopens the card. The initial lookup can populate a card without a toast. This overrides the older comment-toast behavior below; merge dialogs remain unchanged.
+Comment notifications use the persistent worktree-scoped comment cards described in [README.md](README.md), replacing comment toasts. The sidebar saves the latest five human comments per space in shared `github-spaces.comments` state, with `attentionIds` (pending comments) and `dismissedIds` (cards the person closed). Five extra copies of the same mod, with `props: { role: "comment", slot: 0..4 }`, each render one card for the selected space and never initialize polling. Attach them as floating blocks with `edge: "bottom"`, `align: "end"` to the work-area node — attaching it to the terminal block covers the terminal's status line.
+
+`dock.js` exports `commentCard(slot)`: a 360px-wide card (author, UTC time, 300-character preview, bottom-right GitHub link, × close). A slot past the last visible comment returns an empty div, so its block collapses. Open links through the click callback's `cx.open_url`; never through a shell.
+
+Closing a card records its comment id; the sidebar count drops with it. A close callback dismisses by comment id, so it stays safe after newer activity arrived. Resolution and new commits never close cards; only × does. Switching spaces swaps cards without deleting state. The initial lookup can populate history without a toast.
 
 The first successful lookup of a place is quiet. Later, a newly observed merge triggers a toast and, for linked worktrees only, opens Herdr's existing `worktree` removal dialog. Record handled PRs in `localStorage` to avoid repeated prompts. Never delete automatically.
 
-Also fetch inline comments using `gh api repos/<owner>/<repo>/pulls/<number>/comments?per_page=100 --paginate --slurp`, with the host and repository from the PR URL. Combine discussion comments, submitted reviews, and inline replies by creation/submission time. Ignore pending reviews and the local `gh` account's own activity before choosing the latest event. A blank submitted review still counts as activity. Preserve the previous unread inline event if that API request fails.
+Using the host and repository from the PR URL, fetch paginated REST issue comments, reviews, and inline comments. REST actor metadata identifies bot accounts and supplies direct comment URLs. Fetch paginated GraphQL `reviewThreads` with `isResolved` and the first comment's `databaseId`; match inline roots and replies to their thread.
 
-New latest activity updates the persistent card and sidebar bubble. Clicking the space row clears the bubble; dismissing the card is a separate action. Do not reopen dismissed activity with the same timestamp; edits are not tracked.
+Combine discussion comments, nonempty submitted review summaries, and inline replies. Exclude pending reviews, your own account, bot accounts, and usernames containing `bot` case-insensitively. Sort by creation/submission time, using comment identity to break ties. Do not collapse comments sharing a timestamp. Keep only the latest five for the dock, but calculate the sidebar count from the full human-comment list.
+
+For open PRs, attention is the list of unresolved human comment ids. Attention also excludes comments older than the PR's latest commit (`commits[].committedDate` from `gh pr view`) — a push clears the badge; thread resolution, closing cards, or the PR closing/merging also do. The sidebar badge subtracts closed card ids from that list on every render.
+
+If any activity endpoint fails, keep the previous comments and attention count while still refreshing CI and merge status. Never interpret a partial response as resolved feedback.
+
+New human activity updates the persistent card. Resolving feedback or pushing a commit clears the sidebar without changing dock history. Edits are not tracked.
 
 Keep agent status in the existing agents list; do not replace it with PR status.
 
@@ -69,7 +79,7 @@ Counts reflect the last fetch. Do not auto-fetch just to refresh the display. Bl
 
 ## Built from
 
-One mod folder, `mods/github-spaces/`, containing `main.js`, `mod.json`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block. No layout files or key bindings are shipped.
+One mod folder, `mods/github-spaces/`, containing `main.js`, `dock.js`, `mod.json`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block and comment dock. No layout files or key bindings are shipped.
 
 Start from a clone of Herdr's shipped `spaces` mod. Never edit the shipped original. Reuse its grouping, watchers, menus, and row interactions.
 
@@ -79,12 +89,12 @@ The main paths through `main.js` are:
 | --- | --- |
 | Checkout state and grouping | `check`, `refreshGit`, `ordered`, `grouped` |
 | PR polling and classification | `pollPRs`, `readPR` |
-| Notifications and remembered state | `speak`, `readPrComments` |
+| Dock history and merge notifications | `speak`, `commentCard` in `dock.js` |
 | Row controls | `prMark`, `fetchButton`, `fetchRebase` |
 
 Use `exec` with `{ cwd, on }` for Git and GitHub CLI commands. Use `notify` for toasts and `openOverlay` for Herdr's removal dialog. Reuse shipped `workspace-chrome` icons where possible; keep the arrow, comment, and conflict assets in this mod.
 
-Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(900)` for animation. Persist handled merges and comment timestamps in `localStorage`. Read the installed Herdr guide and generated types before building against its API.
+Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(900)` for animation. Persist handled merges in `localStorage`; dock history and dismissal use shared state. Read the installed Herdr guide and generated types before building against its API.
 
 ## Watch out
 
@@ -100,6 +110,6 @@ Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(90
 1. `node github-spaces/test-branch-status.cjs` passes from the repository root. It covers synchronized, behind-only, ahead-only, independently diverged, and rebased-but-unpushed histories.
 2. `herdr-app check <installed-mod-directory>` passes, status reports no errors, and a live screenshot confirms row layout and colors.
 3. PR and no-PR rows both render; worktree nesting, selection, menus, and reordering still work.
-4. Clicking fetch/rebase animates, reports failures, and refreshes counts. A merge prompts once without automatic deletion; new latest comments notify and their bubbles clear on a row click.
+4. Clicking fetch/rebase animates, reports failures, and refreshes counts. A merge prompts once without automatic deletion. Human feedback produces a numbered sidebar icon and a latest-five set of independent cards with exact comment links. Resolution and card closes lower the number; a newer commit clears the badge; only × closes a card.
 
 Headless checks and branch-state tests do not prove live notification behavior. Exercise those transitions separately before claiming full verification.

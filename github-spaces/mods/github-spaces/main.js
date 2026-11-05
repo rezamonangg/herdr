@@ -5,34 +5,57 @@
 //
 // On top of that, GitHub (gh): each repo space's PR shows as a mark — checks
 // failed red, running, passing green; merged purple; a bubble for comments not
-// read yet. A merged worktree asks to be deleted; a new comment says so. Beside
+// needing attention. A merged worktree asks to be deleted; comments stay docked. Beside
 // each repo space's name, a down-arrow button runs git fetch + rebase on its
 // branch, red with a count while it sits behind its upstream.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { commentDock } from "./dock.js";
+import { commentCard } from "./dock.js";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify, props } from "herdr";
 
-// Combine discussion comments, submitted reviews and inline replies into one watermark.
+// Resolution is exposed on review threads, not on REST review comments.
+const REVIEW_THREADS = `query($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
+  repository(owner:$owner, name:$name) { pullRequest(number:$number) {
+    reviewThreads(first:100, after:$endCursor) {
+      nodes { isResolved comments(first:1) { nodes { databaseId } } }
+      pageInfo { hasNextPage endCursor }
+    }
+  } }
+}`;
+
+// Keep dock history separate from feedback that still needs attention.
 function readPR(j, login) {
   const roll = (j.statusCheckRollup ?? []).map((c) => c.conclusion ?? c.status);
   const fail = roll.some((c) => ["FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "ERROR"].includes(c));
   const run = roll.some((c) => c == null || ["IN_PROGRESS", "QUEUED", "PENDING", "WAITING"].includes(c));
-  const last = [
+  const resolved = new Map((j.reviewThreads ?? []).map(t => [t.comments?.nodes?.[0]?.databaseId, t.isResolved]));
+  const comments = [
     ...(j.comments ?? []),
-    ...(j.reviews ?? []).map(r => ({ author: r.author, createdAt: r.submittedAt, body: r.body || "New PR review" })),
-    ...(j.reviewComments ?? []).map(c => ({ author: c.user, createdAt: c.created_at, body: c.body })),
-  ].filter(c => c.createdAt && c.author?.login && c.author.login !== login)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(-1)[0];
+    ...(j.reviews ?? []).filter(r => r.body?.trim()).map(r => ({ ...r, createdAt: r.submittedAt })),
+    ...(j.reviewComments ?? []).map(c => ({
+      ...c, author: c.user, createdAt: c.created_at, url: c.html_url,
+      resolved: resolved.get(c.in_reply_to_id ?? c.id) === true,
+    })),
+  ].filter(c => c.createdAt && c.author?.login && c.author.login !== login
+    && c.author.type !== "Bot" && c.author.is_bot !== true && !/bot/i.test(c.author.login))
+    .map(c => ({
+      id: c.url || `${c.id ?? c.author.login}:${c.createdAt}`,
+      at: c.createdAt, author: c.author.login, body: c.body?.slice(0, 300) ?? "",
+      url: c.url || j.url,
+      resolved: c.resolved === true,
+    })).sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+  // Pending human comments: resolution or a newer commit removes them.
+  const pushed = (j.commits ?? []).map(c => c.committedDate ?? "").sort().pop() ?? "";
+  const attentionIds = (j.state === "OPEN" ? comments.filter(c => !c.resolved && c.at > pushed) : []).map(c => c.id);
   return {
     number: j.number,
     state: j.state,
     conflict: j.mergeable === "CONFLICTING",
     ci: fail ? "fail" : run ? "run" : "pass",
-    commentAt: last?.createdAt ?? null,
-    commentBy: last?.author.login ?? null,
-    commentHead: last?.body?.split("\n")[0]?.slice(0, 90) ?? "",
+    comments: comments.slice(0, 5),
+    attentionIds,
+    commentCount: attentionIds.length,
   };
 }
 
@@ -76,7 +99,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
-    if (props()?.role === "comments") return;
+    if (props()?.role !== undefined) return; // a card copy: no polling, no sidebar
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -97,8 +120,6 @@ export default class Spaces extends View {
     this.asking = new Set(); // where()s a gh call is out for
     this.ghAway = {}; // machine -> ms when gh last couldn't start there
     this.mergedDone = new Set(JSON.parse(localStorage.getItem("pr.merged.done") ?? "[]"));
-    this.commentSeen = JSON.parse(localStorage.getItem("pr.comment.seen") ?? "{}"); // repo#n -> comment time told about
-    this.commentRead = JSON.parse(localStorage.getItem("pr.comment.read") ?? "{}"); // repo#n -> comment time read
     this.rebasing = {}; // space id -> a fetch/rebase in flight
     this.login = null; // gh account, so own comments don't notify
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
@@ -430,7 +451,7 @@ export default class Spaces extends View {
         this.pressed = null;
         this.over = null;
         if (from !== null && over === i && from !== i) run("space.move", { id: spaces()[from].id, index: i + 1 });
-        else if (from === i) { run("space.select", { id: w.id }); this.readPrComments({ k, g }); }
+        else if (from === i) run("space.select", { id: w.id });
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w))
@@ -438,10 +459,10 @@ export default class Spaces extends View {
         h_flex()
           .gap(9)
           .items_center()
-          .when(Boolean(tree), (el) => el.pl(22).child(this.prMark(this.pr[k], g, t) ?? svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
+          .when(Boolean(tree), (el) => el.pl(22).child(this.prMark(this.pr[k], g, t, w.id) ?? svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .when(!tree && Boolean(this.pr[k]), (el) => el.child(this.prMark(this.pr[k], g, t))) // prMark is null without a PR
+          .when(!tree && Boolean(this.pr[k]), (el) => el.child(this.prMark(this.pr[k], g, t, w.id))) // prMark is null without a PR
           .when(Boolean(g), (el) => el.child(this.fetchButton(w, g, t)))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
       );
@@ -461,21 +482,42 @@ export default class Spaces extends View {
       cx.spawn(async (cx) => {
         try {
           const options = { cwd: JSON.parse(key)[1], on };
-          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,url,state,mergeable,statusCheckRollup,comments,reviews"], options);
+          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,url,state,mergeable,statusCheckRollup,author,commits"], options);
           this.ghAway[on] = 0;
           if (r.code === 0) {
             const data = JSON.parse(r.stdout);
             const target = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\/pull\/\d+$/.exec(data.url ?? "");
             if (!target) throw new Error("Unrecognized PR URL");
-            const inline = await exec("gh", ["api", "--hostname", target[1],
-              `repos/${target[2]}/pulls/${data.number}/comments?per_page=100`, "--paginate", "--slurp"], options);
-            if (inline.code === 0) data.reviewComments = JSON.parse(inline.stdout).flat();
-            else console.warn(`Couldn't read inline PR comments: ${inline.stderr}`);
+            let complete = true;
+            for (const [field, endpoint] of [
+              ["comments", `issues/${data.number}/comments`],
+              ["reviews", `pulls/${data.number}/reviews`],
+              ["reviewComments", `pulls/${data.number}/comments`],
+            ]) {
+              const result = await exec("gh", ["api", "--hostname", target[1],
+                `repos/${target[2]}/${endpoint}?per_page=100`, "--paginate", "--slurp"], options);
+              if (result.code !== 0) { complete = false; console.warn(result.stderr); continue; }
+              const rows = JSON.parse(result.stdout).flat();
+              data[field] = field === "reviewComments" ? rows : rows.map(c => ({
+                  ...c, author: c.user, url: c.html_url, createdAt: c.created_at, submittedAt: c.submitted_at,
+                }));
+            }
+            const [owner, name] = target[2].split("/");
+            const threads = await exec("gh", ["api", "--hostname", target[1], "graphql", "-f", `query=${REVIEW_THREADS}`,
+              "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${data.number}`, "--paginate", "--slurp"], options);
+            if (threads.code !== 0) { complete = false; console.warn(threads.stderr); }
+            else {
+              const pages = JSON.parse(threads.stdout);
+              complete &&= pages.length > 0 && pages.every(p => Array.isArray(p.data?.repository?.pullRequest?.reviewThreads?.nodes));
+              data.reviewThreads = pages.flatMap(p => p.data?.repository?.pullRequest?.reviewThreads?.nodes ?? []);
+            }
             const next = readPR(data, this.login);
             const old = this.pr[key];
-            // A partial API failure must not clear an unread inline comment.
-            if (inline.code !== 0 && old?.commentAt && old.commentAt > (next.commentAt ?? "")) {
-              next.commentAt = old.commentAt; next.commentBy = old.commentBy; next.commentHead = old.commentHead;
+            // Keep the previous activity snapshot if any activity endpoint failed.
+            if (!complete) {
+              next.comments = old?.comments ?? [];
+              next.attentionIds = old?.attentionIds ?? [];
+              next.commentCount = old?.commentCount ?? 0;
             }
             this.pr[key] = next;
           } else if (/no pull requests found|not a github repository|no git remotes found/i.test(r.stderr ?? "")) this.pr[key] = null;
@@ -489,22 +531,28 @@ export default class Spaces extends View {
     }
   }
 
-  // What a PR's change should say: a merged worktree is offered for deletion,
-  // a new comment (someone else's) says so once. A place's first look only
-  // learns, quietly, so old news never pops up.
+  // Dock history survives resolution and commits; only new activity reopens a dismissed card.
   speak(s, key, g) {
     const pr = this.pr[key];
     const first = !this.prSeen.has(key);
     this.prSeen.add(key);
     if (!pr) return;
     const id = `${g.repo}#${pr.number}`;
-    if (pr.commentAt && pr.commentBy !== this.login) {
+    if (pr.comments?.length) {
       const cards = shared("github-spaces.comments") ?? {};
       const old = cards[s.id];
-      if (!old || old.at !== pr.commentAt || old.pr !== id) {
+      const revision = pr.comments.map(c => c.id).join("\n");
+      // Attention ids refresh every poll (resolution changes them without a
+      // new comment list); per-comment dismissal is carried over. A legacy
+      // whole-dock "dismissed" closes everything that list knew.
+      if (!old || old.pr !== id || old.revision !== revision
+        || JSON.stringify(old.attentionIds ?? []) !== JSON.stringify(pr.attentionIds ?? [])) {
+        const legacy = Array.isArray(old?.dismissedIds) ? old.dismissedIds
+          : old?.dismissed ? (old.comments ?? []).map(c => c.id) : [];
         setShared("github-spaces.comments", { ...cards, [s.id]: {
-          pr: id, at: pr.commentAt, title: `PR #${pr.number} · ${s.name}`,
-          body: `${pr.commentBy}: ${pr.commentHead}`, dismissed: false,
+          pr: id, at: pr.comments[0].at, revision, title: `PR #${pr.number} · ${s.name}`,
+          comments: pr.comments, attentionIds: pr.attentionIds ?? [],
+          dismissedIds: [...new Set(legacy.filter(i => pr.comments.some(c => c.id === i)))],
         } });
       }
     }
@@ -521,17 +569,13 @@ export default class Spaces extends View {
         if (g.linked) openOverlay({ mod: "worktree", kind: "dialog", width: 440, height: 260, props: { space: s.id, action: "remove" } });
       }
     }
-    if (pr.commentAt && pr.commentBy !== this.login && pr.commentAt > (this.commentSeen[id] ?? "")) {
-      this.commentSeen[id] = pr.commentAt;
-      localStorage.setItem("pr.comment.seen", JSON.stringify(this.commentSeen));
-    }
   }
 
   // The PR mark: ✗ failed, spinner running, ✓ passing, ● merged (purple), ○
-  // closed. A bubble marks a comment not read yet; opening the space reads it.
-  // Marks use explicit colors, not theme ansi: graphite's ansi1 is pink, and
-  // the marks must read at a glance, like the behind badge does.
-  prMark(pr, g, t) {
+  // closed. The bubble counts pending human comments: resolution and closing
+  // a card, or a newer commit, drop them. Marks use explicit colors,
+  // not theme ansi: graphite's ansi1 is pink, and the marks must read at a glance.
+  prMark(pr, g, t, sid) {
     if (!pr) return null;
     const status = pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.conflict ? "conflict" : pr.ci;
     const look = {
@@ -542,24 +586,18 @@ export default class Spaces extends View {
       merged: ["circle-check", "#a78bfa", "merged"],
       closed: ["minus", t.dim, "closed"],
     }[status];
-    const unread = pr.commentAt && pr.commentAt > (this.commentRead[`${g.repo}#${pr.number}`] ?? "") && pr.commentBy !== this.login;
+    const card = sid ? (shared("github-spaces.comments") ?? {})[sid] : null;
+    const closed = new Set(card ? (card.dismissedIds ?? (card.dismissed ? (card.comments ?? []).map(c => c.id) : [])) : []);
+    const count = (pr.attentionIds ?? []).filter(i => !closed.has(i)).length;
     return h_flex().id(`pr-${pr.number}`).gap(4).items_center().flex_none()
       .tooltip(`PR #${pr.number} · ${look[2]}`)
       .child(svg(status === "conflict" ? "mods/github-spaces/conflict.svg" : `mods/workspace-chrome/${look[0]}.svg`)
         .size(status === "run" ? 12 : 13).flex_none().text_color(look[1])
         .when(status === "run", el => el.spin(900)))
-      .when(Boolean(unread), (el) => el.child(svg("mods/github-spaces/comment.svg").size(12).flex_none().text_color(t.accent).tooltip(`${pr.commentBy} commented`)));
-  }
-
-  // Opening a space reads its PR's comment (the bubble goes).
-  readPrComments({ k, g }) {
-    const pr = this.pr[k];
-    if (!g || !pr?.commentAt) return;
-    const id = `${g.repo}#${pr.number}`;
-    if (pr.commentAt > (this.commentRead[id] ?? "")) {
-      this.commentRead[id] = pr.commentAt;
-      localStorage.setItem("pr.comment.read", JSON.stringify(this.commentRead));
-    }
+      .when(count > 0, el => el.child(h_flex().gap(2).items_center().flex_none().text_color(t.accent)
+        .tooltip(`${count} human comments need attention`)
+        .child(svg("mods/github-spaces/comment.svg").size(12).flex_none())
+        .child(div().text_size(10).font_bold().child(String(count)))));
   }
 
   // Only strictly behind is red; divergence may be a rebase or new remote
@@ -623,7 +661,7 @@ export default class Spaces extends View {
   }
 
   render() {
-    if (props()?.role === "comments") return commentDock();
+    if (props()?.role !== undefined) return commentCard(props().slot);
     const t = theme();
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
