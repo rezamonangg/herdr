@@ -50,6 +50,7 @@ function readPR(j, login) {
   const attentionIds = (j.state === "OPEN" ? comments.filter(c => !c.resolved && c.at > pushed) : []).map(c => c.id);
   return {
     number: j.number,
+    url: j.url,
     state: j.state,
     conflict: j.mergeable === "CONFLICTING",
     ci: fail ? "fail" : run ? "run" : "pass",
@@ -462,7 +463,7 @@ export default class Spaces extends View {
           .when(Boolean(tree), (el) => el.pl(22).child(this.prMark(this.pr[k], g, t, w.id) ?? svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .when(!tree && Boolean(this.pr[k]), (el) => el.child(this.prMark(this.pr[k], g, t, w.id))) // prMark is null without a PR
+          .when(!tree && this.pr[k]?.state === "OPEN", (el) => el.child(this.prMark(this.pr[k], g, t, w.id))) // plain spaces: open PRs only; old merged ones are noise
           .when(Boolean(g), (el) => el.child(this.fetchButton(w, g, t)))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
       );
@@ -594,6 +595,11 @@ export default class Spaces extends View {
       .child(svg(status === "conflict" ? "mods/github-spaces/conflict.svg" : `mods/workspace-chrome/${look[0]}.svg`)
         .size(status === "run" ? 12 : 13).flex_none().text_color(look[1])
         .when(status === "run", el => el.spin(900)))
+      .child(div().id(`pr-open-${pr.number}`).text_size(10.5).text_color(t.dim).cursor_pointer()
+        .hover(s => s.text_color(t.accent)).tooltip("Open PR on GitHub")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); if (pr.url) cx.open_url(pr.url); })
+        .child(`#${pr.number}`))
       .when(count > 0, el => el.child(h_flex().gap(2).items_center().flex_none().text_color(t.accent)
         .tooltip(`${count} human comments need attention`)
         .child(svg("mods/github-spaces/comment.svg").size(12).flex_none())

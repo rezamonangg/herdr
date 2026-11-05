@@ -53,7 +53,7 @@ Herdr reloads saved changes automatically. PR lookups run every two minutes, inc
 | Red cross | Checks failed |
 | Yellow spinner | Checks running or pending |
 | Green circle-check | Checks classified as passing |
-| Purple circle-check | PR merged |
+| Purple circle-check | PR merged (worktree rows only; plain spaces show open PRs only) |
 | Grey minus | PR closed without merging |
 | Original icon | No known PR for the branch |
 

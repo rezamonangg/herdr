@@ -96,7 +96,7 @@ async function main() {
     assert.equal(pr.comments.length, 5, 'dock keeps only five comments');
     assert.deepEqual(Array.from(pr.comments, c => c.body), ['Comment 7', 'Comment 6', 'Comment 5', 'Comment 4', 'Comment 3']);
     assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
-    const badge = view.prMark(pr, {}, {}).items[1];
+    const badge = view.prMark(pr, {}, {}).items[2];
     assert.equal(badge.items[1].items[0], '7', 'sidebar renders a number beside the comment icon');
     const inline = { id: 42, user: { login: 'reviewer', type: 'User' },
       created_at: '2026-11-03T09:00:00Z', body: 'Please fix this line',
@@ -112,7 +112,7 @@ async function main() {
     ]) {
       pr = readPR({ ...feedback, ...extra }, view.login);
       assert.equal(pr.commentCount > 0, expected, name);
-      assert.equal(view.prMark(pr, {}, {}).items.length, expected ? 2 : 1, `${name}: sidebar rendering`);
+      assert.equal(view.prMark(pr, {}, {}).items.length, expected ? 3 : 2, `${name}: sidebar rendering`);
       assert.equal(pr.comments.length, name.includes('bot') ? 0 : 1, `${name}: dock excludes bots but keeps resolved human history`);
       console.log(`PASS ${name}`);
     }
@@ -189,7 +189,7 @@ async function main() {
     const shown = () => [0, 1, 2, 3, 4].filter(s => commentCard(s).items.length).length; // blocks with content
     const closeTop = () => commentCard(0).items[0].items[1].on_click({}, { stop_propagation() {} });
     const bodyOf = s => commentCard(s).items[2].items[0];
-    const badgeOf = () => view.prMark(view.pr[key], repo, {}, 'test').items[1];
+    const badgeOf = () => view.prMark(view.pr[key], repo, {}, 'test').items[2];
     assert.equal(shown(), 5, 'five comments render as five independent cards');
     assert.ok(String(commentCard(4).items[0].items[0].items[0]).startsWith('reviewer · '), 'each slot is its own card with its own comment');
     assert.ok(String(commentCard(0).items[1].items[0]).includes('4 more behind'), 'top card counts the others');
