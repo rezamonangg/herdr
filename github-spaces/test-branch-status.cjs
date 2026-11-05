@@ -248,6 +248,23 @@ async function main() {
     fixture.comments.push(comment(13, '2026-11-03T16:00:00Z'));
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
     assert.equal(shown(), 1, 'migration keeps old cards closed when a new comment arrives');
+    // A reload forgets what it saw: a comment that arrived meanwhile still notifies, once.
+    view.prSeen.delete(key);
+    fixture.comments.push(comment(14, '2026-11-03T17:00:00Z'));
+    const beforeReload = toasts.length;
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(toasts.length, beforeReload + 1, 'a comment missed while the mod was reloaded notifies after the reload');
+    // After the git refresh, only spaces without PR data are polled.
+    view.asking = new Set(); view.pr = {};
+    let asked = 0; const realExec = githubResponse;
+    githubResponse = args => { if (args[0] === 'pr') asked++; return realExec(args); };
+    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await Promise.all(tasks);
+    assert.equal(asked, 1, 'the missing PR is fetched right away');
+    assert.ok(view.pr[key], 'its mark is back');
+    asked = 0; view.asking = new Set();
+    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await Promise.all(tasks);
+    assert.equal(asked, 0, 'spaces that already have PR data are not polled again');
+    githubResponse = realExec;
     console.log('PASS independent cards, per-card dismissal, badge decrement, links, scope, and migration');
     async function verify(name, ahead, behind, red) {
       await view.check(key, {});

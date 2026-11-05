@@ -259,6 +259,7 @@ export default class Spaces extends View {
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
       this.refreshing = false;
+      this.pollPRs(cx, (k) => !(k in this.pr)); // branches just became known: fetch missing PRs now, not at the next timer tick
       cx.notify();
     });
   }
@@ -292,6 +293,7 @@ export default class Spaces extends View {
           info.behind = Math.abs(parseInt(b, 10)) || 0;
         }
       }
+      if (info.branch !== this.git[key]?.branch) delete this.pr[key]; // another branch, another PR
       this.git[key] = info;
       if (!on) this.watch(repo, cx);
     } catch {
@@ -470,14 +472,14 @@ export default class Spaces extends View {
   }
 
   // Poll in background too. A machine where gh can't start backs off for half an hour.
-  pollPRs(cx) {
+  pollPRs(cx, only) {
     if (!window()) return; // check() has no window; the real app always polls
     const ps = panes();
     for (const s of spaces()) {
       const key = where(s, ps);
       const g = this.git[key];
       const on = s.machine ?? null;
-      if (!g?.branch || this.asking.has(key)) continue;
+      if (!g?.branch || this.asking.has(key) || (only && !only(key))) continue;
       if (this.ghAway[on] && Date.now() - this.ghAway[on] < 1800000) continue;
       this.asking.add(key);
       cx.spawn(async (cx) => {
@@ -548,9 +550,9 @@ export default class Spaces extends View {
       // whole-dock "dismissed" closes everything that list knew.
       if (!old || old.pr !== id || old.revision !== revision
         || JSON.stringify(old.attentionIds ?? []) !== JSON.stringify(pr.attentionIds ?? [])) {
-        // Toast for pending comments that weren't in the last list (never on the first look).
+        // Toast for pending comments missing from the saved list; no saved list (first install) means no toast.
         const known = new Set((old?.comments ?? []).map(c => c.id));
-        const fresh = old?.pr === id && !first
+        const fresh = old?.pr === id
           ? pr.comments.filter(c => !known.has(c.id) && (pr.attentionIds ?? []).includes(c.id)) : [];
         if (fresh.length) notify({
           title: `PR #${pr.number}: ${fresh[0].author} commented`,

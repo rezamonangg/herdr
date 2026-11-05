@@ -96,7 +96,7 @@ Add five `floating` entries (slot 0–4) to the work-area block in your personal
 (…and likewise slots 2, 3, 4.) The cards use `dock.js` in the same mod folder. It does not run a second poller. Attach the floating block to the work area (above the status bar), not the terminal block, or it covers the terminal's status line.
 
 - New latest comments update the persistent card. Merge and error notifications retain their existing behavior.
-- A new human comment on a PR triggers a Herdr notification ("PR #N: <author> commented"); clicking it selects that space. The first lookup after startup stays quiet.
+- A new human comment on a PR triggers a Herdr notification ("PR #N: <author> commented"); clicking it selects that space. A comment that arrived while Herdr was closed notifies once after restart; a space with no saved comments yet (first install) stays quiet. PR marks refresh within seconds of a reload, once each branch is known.
 - A newly observed merge triggers a toast. For a linked worktree, Herdr's existing removal dialog also opens.
 - Removal requires confirmation. The dialog warns about local changes; removal closes the space and deletes the checkout. The branch remains.
 - Previously handled merges are remembered. Main checkouts are never offered for removal by this mod.
