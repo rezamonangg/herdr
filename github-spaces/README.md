@@ -53,6 +53,7 @@ Herdr reloads saved changes automatically. PR lookups run every two minutes, inc
 | Red cross | Checks failed |
 | Yellow spinner | Checks running or pending |
 | Green circle-check | Checks classified as passing |
+| Blue shield-check beside the CI icon | Open PR is approved (GitHub review decision `APPROVED`) |
 | Purple circle-check | PR merged (worktree rows only; plain spaces show open PRs only) |
 | Grey minus | PR closed without merging |
 | Original icon | No known PR for the branch |
@@ -78,6 +79,16 @@ The row's `↑N ↓N` values are Git's raw commit counts. They compare local his
 
 ## Notifications and cleanup
 
+### Refresh key
+
+Bind a key to re-check every space's branch and PR now instead of waiting for the two-minute poll. Add to the `global` section of `~/.config/herdr-app/keys.json`:
+
+```json
+"cmd-shift-r": "github-spaces.refresh"
+```
+
+A space whose PR was asked for in the last 30 seconds is skipped, so repeated presses stay cheap on the GitHub API.
+
 ### Persistent comment cards
 
 Each human comment on the selected worktree's PR is its own floating block (newest = slot 0): author, UTC timestamp, up to 300 characters, and a **View on GitHub ↗** link. Every card has its own frame and drag spot, so dragging one moves only that card. Up to five cards show; unused slots render nothing and collapse.
@@ -96,7 +107,7 @@ Add five `floating` entries (slot 0–4) to the work-area block in your personal
 (…and likewise slots 2, 3, 4.) The cards use `dock.js` in the same mod folder. It does not run a second poller. Attach the floating block to the work area (above the status bar), not the terminal block, or it covers the terminal's status line.
 
 - New latest comments update the persistent card. Merge and error notifications retain their existing behavior.
-- A new human comment on a PR triggers a Herdr notification ("PR #N: <author> commented"); clicking it selects that space. A comment that arrived while Herdr was closed notifies once after restart; a space with no saved comments yet (first install) stays quiet. PR marks refresh within seconds of a reload, once each branch is known.
+- A new human comment on a PR triggers a Herdr notification (stays up 15 seconds) ("PR #N: <author> commented"); clicking it selects that space. A comment that arrived while Herdr was closed notifies once after restart; a space with no saved comments yet (first install) stays quiet. PR marks refresh within seconds of a reload, once each branch is known.
 - A newly observed merge triggers a toast. For a linked worktree, Herdr's existing removal dialog also opens.
 - Removal requires confirmation. The dialog warns about local changes; removal closes the space and deletes the checkout. The branch remains.
 - Previously handled merges are remembered. Main checkouts are never offered for removal by this mod.

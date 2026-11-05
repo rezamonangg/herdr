@@ -79,7 +79,7 @@ Counts reflect the last fetch. Do not auto-fetch just to refresh the display. Bl
 
 ## Built from
 
-One mod folder, `mods/github-spaces/`, containing `main.js`, `dock.js`, `mod.json`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block and comment dock. No layout files or key bindings are shipped.
+One mod folder, `mods/github-spaces/`, containing `main.js`, `dock.js`, `mod.json`, `approved.svg`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block and comment dock. No layout files or key bindings are shipped.
 
 Start from a clone of Herdr's shipped `spaces` mod. Never edit the shipped original. Reuse its grouping, watchers, menus, and row interactions.
 
@@ -113,3 +113,5 @@ Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(90
 4. Clicking fetch/rebase animates, reports failures, and refreshes counts. A merge prompts once without automatic deletion. Human feedback produces a numbered sidebar icon and a latest-five set of independent cards with exact comment links. Resolution and card closes lower the number; a newer commit clears the badge; only × closes a card.
 
 Headless checks and branch-state tests do not prove live notification behavior. Exercise those transitions separately before claiming full verification.
+
+A `refresh` mod command (`keys.json`: `"cmd-shift-r": "github-spaces.refresh"`, delivered through `nextCommand()`) re-checks git and polls every space's PR, skipping spaces polled in the last 30 seconds.

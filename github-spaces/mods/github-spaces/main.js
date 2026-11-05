@@ -12,7 +12,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { commentCard } from "./dock.js";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify, props } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify, props, nextCommand } from "herdr";
 
 // Resolution is exposed on review threads, not on REST review comments.
 const REVIEW_THREADS = `query($owner:String!, $name:String!, $number:Int!, $endCursor:String) {
@@ -48,11 +48,21 @@ function readPR(j, login) {
   // Pending human comments: resolution or a newer commit removes them.
   const pushed = (j.commits ?? []).map(c => c.committedDate ?? "").sort().pop() ?? "";
   const attentionIds = (j.state === "OPEN" ? comments.filter(c => !c.resolved && c.at > pushed) : []).map(c => c.id);
+  // reviewDecision stays empty unless the repo requires reviews, so also read each
+  // reviewer's latest verdict: approved when someone approved and nobody still asks for changes.
+  const latest = new Map();
+  for (const r of [...(j.reviews ?? [])].sort((a, b) => (a.submittedAt ?? "").localeCompare(b.submittedAt ?? ""))) {
+    if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state) && r.author?.login) latest.set(r.author.login, r.state);
+  }
+  const verdicts = [...latest.values()];
+  const approved = j.reviewDecision === "APPROVED"
+    || (j.reviewDecision !== "CHANGES_REQUESTED" && verdicts.includes("APPROVED") && !verdicts.includes("CHANGES_REQUESTED"));
   return {
     number: j.number,
     url: j.url,
     state: j.state,
     conflict: j.mergeable === "CONFLICTING",
+    approved,
     ci: fail ? "fail" : run ? "run" : "pass",
     comments: comments.slice(0, 5),
     attentionIds,
@@ -119,6 +129,7 @@ export default class Spaces extends View {
     this.pr = {}; // where() -> readPR's answer, null: no PR, missing: not known yet
     this.prSeen = new Set(); // where()s that answered once (their first PR look stays quiet)
     this.asking = new Set(); // where()s a gh call is out for
+    this.polled = {}; // where() -> when its PR was last asked for
     this.ghAway = {}; // machine -> ms when gh last couldn't start there
     this.mergedDone = new Set(JSON.parse(localStorage.getItem("pr.merged.done") ?? "[]"));
     this.rebasing = {}; // space id -> a fetch/rebase in flight
@@ -140,6 +151,16 @@ export default class Spaces extends View {
     // `git status` walks the whole tree, on another machine a process there:
     // only when its answer could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
+    // keys.json: "cmd-shift-r": "github-spaces.refresh"
+    cx.spawn(async (cx) => {
+      for (;;) if ((await nextCommand()) === "refresh") this.refresh(cx);
+    });
+  }
+
+  // Look at every space again now: git state, then its PR (a space polled in the last 30s is skipped, so mashing the key is cheap).
+  refresh(cx) {
+    this.refreshGit(new Set(Object.keys(this.git)), cx);
+    this.pollPRs(cx, (k) => Date.now() - (this.polled[k] ?? 0) > 30000);
   }
 
   checkNew(cx) {
@@ -399,7 +420,7 @@ export default class Spaces extends View {
   gitTail(g, tree, name, t) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
-    const branch = same(raw) || raw === "master" || raw === "main" ? "" : raw;
+    const branch = tree || same(raw) || raw === "master" || raw === "main" ? "" : raw; // a worktree row never repeats its branch
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex()
@@ -482,10 +503,11 @@ export default class Spaces extends View {
       if (!g?.branch || this.asking.has(key) || (only && !only(key))) continue;
       if (this.ghAway[on] && Date.now() - this.ghAway[on] < 1800000) continue;
       this.asking.add(key);
+      this.polled[key] = Date.now();
       cx.spawn(async (cx) => {
         try {
           const options = { cwd: JSON.parse(key)[1], on };
-          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,url,state,mergeable,statusCheckRollup,author,commits"], options);
+          const r = await exec("gh", ["pr", "view", g.branch, "--json", "number,url,state,mergeable,statusCheckRollup,author,commits,reviewDecision"], options);
           this.ghAway[on] = 0;
           if (r.code === 0) {
             const data = JSON.parse(r.stdout);
@@ -557,6 +579,7 @@ export default class Spaces extends View {
         title: `PR #${pr.number}: ${fresh[0].author} commented`,
         body: fresh.length > 1 ? `${fresh.length} new comments in ${s.name}` : `${s.name}: ${fresh[0].body.split("\n")[0].slice(0, 120)}`,
         level: "info",
+        timeout: 15000,
         action: { name: "space.select", args: { id: s.id } },
       });
       const legacy = Array.isArray(old?.dismissedIds) ? old.dismissedIds
@@ -605,6 +628,8 @@ export default class Spaces extends View {
       .child(svg(status === "conflict" ? "mods/github-spaces/conflict.svg" : `mods/workspace-chrome/${look[0]}.svg`)
         .size(status === "run" ? 12 : 13).flex_none().text_color(look[1])
         .when(status === "run", el => el.spin(900)))
+      .when(pr.approved && pr.state === "OPEN", el => el.child(svg("mods/github-spaces/approved.svg").size(13).flex_none()
+        .text_color("#38bdf8").tooltip("approved")))
       .child(div().id(`pr-open-${pr.number}`).text_size(10.5).text_color(t.dim).cursor_pointer()
         .hover(s => s.text_color(t.accent)).tooltip("Open PR on GitHub")
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())

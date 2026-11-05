@@ -116,6 +116,16 @@ async function main() {
       assert.equal(pr.comments.length, name.includes('bot') ? 0 : 1, `${name}: dock excludes bots but keeps resolved human history`);
       console.log(`PASS ${name}`);
     }
+    assert.equal(readPR({ ...fixture, reviewDecision: 'APPROVED' }, 'me').approved, true, 'an approved PR is flagged');
+    assert.equal(readPR({ ...fixture, reviewDecision: 'CHANGES_REQUESTED' }, 'me').approved, false);
+    const verdict = (who, state, at) => ({ author: { login: who }, state, submittedAt: at, body: '' });
+    assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z')] }, 'me').approved, true, 'an approval counts even when reviewDecision is empty');
+    assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z'), verdict('dede', 'CHANGES_REQUESTED', '2026-11-05T02:00:00Z')] }, 'me').approved, false, 'another reviewer asking for changes blocks it');
+    assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'CHANGES_REQUESTED', '2026-11-05T01:00:00Z'), verdict('alfin', 'APPROVED', '2026-11-05T02:00:00Z')] }, 'me').approved, true, 'a reviewer\'s latest verdict wins');
+    assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z'), verdict('alfin', 'DISMISSED', '2026-11-05T02:00:00Z')] }, 'me').approved, false, 'a dismissed approval no longer counts');
+    const approvedMark = view.prMark(readPR({ ...fixture, reviewDecision: 'APPROVED' }, 'me'), {}, {});
+    assert.ok(!view.prMark(readPR({ ...fixture }, 'me'), {}, {}).items.some(i => String(i.kind).endsWith('/approved.svg')), 'no icon without approval');
+    assert.ok(approvedMark.items.some(i => String(i.kind).endsWith('/approved.svg')), 'approved PR renders the approved icon');
     pr = readPR({ ...feedback, author: { login: 'reviewer' } }, 'me');
     assert.equal(pr.commentCount + pr.comments.length, 0, "the PR creator's own comments never count or show");
     const resolved = { reviewThreads: [{ isResolved: true, comments: { nodes: [{ databaseId: 42 }] } }] };
@@ -155,7 +165,7 @@ async function main() {
     const key = JSON.stringify([null, cwd]);
     polledSpaces.push({ ...space, folder: cwd });
     view.git[key] = { ...repo, branch: 'feature' };
-    view.asking = new Set(); view.ghAway = {};
+    view.asking = new Set(); view.ghAway = {}; view.polled = {};
     view.prSeen.add(key);
     fixture.reviewComments = [inline];
     let failedEndpoint = '';
@@ -258,6 +268,19 @@ async function main() {
     fixture.comments.push(comment(13, '2026-11-03T16:00:00Z'));
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
     assert.equal(shown(), 1, 'migration keeps old cards closed when a new comment arrives');
+    // The refresh key re-polls every space, but not one asked for within 30 seconds.
+    view.asking = new Set(); view.polled = {};
+    let gitRefreshed = 0; view.refreshGit = keys => { gitRefreshed += keys.size; };
+    let refreshAsked = 0; const gh = githubResponse;
+    githubResponse = args => { if (args[0] === 'pr') refreshAsked++; return gh(args); };
+    tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
+    assert.equal(refreshAsked, 1, 'refresh polls the space');
+    assert.ok(gitRefreshed > 0, 'refresh re-checks git state');
+    view.asking = new Set();
+    tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
+    assert.equal(refreshAsked, 1, 'a second refresh within 30s does not hit GitHub again');
+    githubResponse = gh;
+    assert.equal(toasts.at(-1).timeout, 15000, 'comment toasts stay up for 15 seconds');
     // A reload forgets what it saw: a comment that arrived meanwhile still notifies, once.
     view.prSeen.delete(key);
     fixture.comments.push(comment(14, '2026-11-03T17:00:00Z'));
