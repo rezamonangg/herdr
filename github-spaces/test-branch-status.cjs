@@ -124,8 +124,10 @@ async function main() {
     assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'CHANGES_REQUESTED', '2026-11-05T01:00:00Z'), verdict('alfin', 'APPROVED', '2026-11-05T02:00:00Z')] }, 'me').approved, true, 'a reviewer\'s latest verdict wins');
     assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z'), verdict('alfin', 'DISMISSED', '2026-11-05T02:00:00Z')] }, 'me').approved, false, 'a dismissed approval no longer counts');
     const approvedMark = view.prMark(readPR({ ...fixture, reviewDecision: 'APPROVED' }, 'me'), {}, {});
-    assert.ok(!view.prMark(readPR({ ...fixture }, 'me'), {}, {}).items.some(i => String(i.kind).endsWith('/approved.svg')), 'no icon without approval');
-    assert.ok(approvedMark.items.some(i => String(i.kind).endsWith('/approved.svg')), 'approved PR renders the approved icon');
+    assert.ok(!view.prMark(readPR({ ...fixture }, 'me'), {}, {}).items.some(i => i.items?.some(c => String(c.kind).endsWith('/approved.svg'))), 'no icon without approval');
+    const approvedBox = approvedMark.items.find(i => i.items?.some(c => String(c.kind).endsWith('/approved.svg')));
+    assert.ok(approvedBox, 'approved PR renders the approved icon');
+    assert.match(approvedBox.tooltip, /approved/, 'hovering the approved icon says so');
     pr = readPR({ ...feedback, author: { login: 'reviewer' } }, 'me');
     assert.equal(pr.commentCount + pr.comments.length, 0, "the PR creator's own comments never count or show");
     const resolved = { reviewThreads: [{ isResolved: true, comments: { nodes: [{ databaseId: 42 }] } }] };
