@@ -329,6 +329,10 @@ export default class BranchReview extends View {
     this.diffLoading = false;
     this.diffSeq = 0;
     this.cache = new Map();
+    this.displayRows = null;
+    this.displayFor = null;
+    this.displayMode = null;
+    this.displayLongest = 0;
     this.ctx = null;
     this.loading = false;
     this.error = null;
@@ -374,13 +378,16 @@ export default class BranchReview extends View {
         this.sel = null;
         this.cache.clear();
       }
-      const head = await gitText(["rev-parse", "HEAD"], ctx);
-      const branch = (await gitText(["rev-parse", "--abbrev-ref", "HEAD"], ctx)) || "HEAD";
-      const raw = (await git(["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], ctx)).stdout;
-      const def = await detectBase(ctx);
+      const [head, branch, raw] = await Promise.all([
+        gitText(["rev-parse", "HEAD"], ctx),
+        gitText(["rev-parse", "--abbrev-ref", "HEAD"], ctx),
+        git(["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], ctx),
+      ]);
+      const refs = raw.stdout.split("\n").filter(Boolean);
+      const def = PROBES.find((r) => refs.includes(r)) ?? (await detectBase(ctx));
       this.defaultBase = def;
-      this.refs = rankRefs(raw.split("\n"), branch, def);
-      this.branch = branch;
+      this.refs = rankRefs(refs, branch || "HEAD", def);
+      this.branch = branch || "HEAD";
 
       const key = `${loc.on ?? ""}:${root}`;
       let chosen = base ?? savedBase(key);
@@ -418,6 +425,8 @@ export default class BranchReview extends View {
       this.cache.clear();
       this.error = null;
       if (!files.some((f) => f.path === this.sel)) this.sel = files[0]?.path ?? null;
+      this.loading = false;
+      cx.notify();
       if (this.sel) await this.loadDiff(cx, files.find((f) => f.path === this.sel));
       else this.rows = [];
     } catch (e) {
@@ -508,8 +517,28 @@ export default class BranchReview extends View {
     return this.loadDiff(cx, file);
   }
 
-  visible() {
-    return this.diffMode === "split" ? splitRows(this.rows) : this.rows;
+  // Rows and their plain-text width are expensive to derive; do it when the
+  // diff or mode changes, not on every hover/click render.
+  display() {
+    if (this.displayFor === this.rows && this.displayMode === this.diffMode) return this.displayRows;
+    this.displayFor = this.rows;
+    this.displayMode = this.diffMode;
+    const rows = this.diffMode === "split" ? splitRows(this.rows) : this.rows;
+    let longest = 0;
+    const prep = (row) => {
+      if (!row) return;
+      if (!row.code) row.code = codeSpans(row.s);
+      longest = Math.max(longest, row.code.reduce((n, [text]) => n + text.length, 0));
+    };
+    for (const row of rows) {
+      if (row.k === "pair") { prep(row.d); prep(row.a); }
+      else if (row.k === "ctx") prep(row.d);
+      else if (row.k === "fold") longest = Math.max(longest, (row.text ?? "").length);
+      else prep(row);
+    }
+    this.displayRows = rows;
+    this.displayLongest = longest;
+    return rows;
   }
 
   key(e, cx) {
@@ -534,13 +563,8 @@ export default class BranchReview extends View {
     const totals = this.files.reduce((n, f) => ({ add: n.add + (f.add ?? 0), del: n.del + (f.del ?? 0) }), { add: 0, del: 0 });
     const file = this.files.find((f) => f.path === this.sel);
     const size = settings().font_size;
-    const rows = this.visible();
-    const longest = rows.reduce((n, row) => {
-      const cells = this.diffMode === "split" ? (row.k === "pair" ? [row.d, row.a] : row.k === "ctx" ? [row.d] : []) : [row];
-      let here = 0;
-      for (const cell of cells) here = Math.max(here, codeSpans(cell?.s).reduce((m, [text]) => m + text.length, 0));
-      return Math.max(n, here || (row.text ?? "").length);
-    }, 0);
+    const rows = this.display();
+    const longest = this.displayLongest;
     const width = this.diffMode === "split" ? Math.max(500, longest * charWidth(size) * 2 + 90) : Math.max(320, longest * charWidth(size) + 70);
     const listId = `br-diff-${hash(`${this.sel}:${this.diffMode}`)}`;
 
@@ -802,7 +826,7 @@ export default class BranchReview extends View {
   }
 
   spans(row, t) {
-    return codeSpans(row?.s).map(([text, fg, bg]) =>
+    return (row?.code ?? codeSpans(row?.s)).map(([text, fg, bg]) =>
       div().flex_none()
         .when(Boolean(fg), (e) => e.text_color(color(fg, t)))
         .when(Boolean(bg), (e) => e.bg(color(bg, t)))
