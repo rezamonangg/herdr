@@ -61,6 +61,8 @@ async function main() {
     }, { timeout: 1000 });
     const view = new Spaces();
     view.git = {}; view.checked = {}; view.unsure = new Set(); view.rebasing = {};
+    view.pr = {}; view.act = {}; view.prNum = {}; view.retry = {}; view.tries = {};
+    view.ghDead = {}; view.authTold = new Set(); view.holdUntil = 0;
     view.watch = () => {}; // No filesystem watcher in a one-shot test.
     for (const [name, state, mergeable, ci, icon, color] of [
       ['conflict beats passing CI', 'OPEN', 'CONFLICTING', 'SUCCESS', 'conflict', '#f97316'],
@@ -167,7 +169,7 @@ async function main() {
     const key = JSON.stringify([null, cwd]);
     polledSpaces.push({ ...space, folder: cwd });
     view.git[key] = { ...repo, branch: 'feature' };
-    view.asking = new Set(); view.ghAway = {}; view.polled = {};
+    view.asking = new Set(); view.polled = {};
     view.prSeen.add(key);
     fixture.reviewComments = [inline];
     let failedEndpoint = '';
@@ -301,6 +303,139 @@ async function main() {
     assert.equal(asked, 0, 'spaces that already have PR data are not polled again');
     githubResponse = realExec;
     console.log('PASS independent cards, per-card dismissal, badge decrement, links, scope, and migration');
+
+    // A legacy status context reports state, not conclusion.
+    const ciOf = (entry) => readPR({ number: 1, state: 'OPEN', statusCheckRollup: [entry] }).ci;
+    assert.equal(ciOf({ state: 'FAILURE' }), 'fail', 'legacy failing status');
+    assert.equal(ciOf({ state: 'PENDING' }), 'run', 'legacy pending status');
+    assert.equal(ciOf({ state: 'SUCCESS' }), 'pass', 'legacy passing status');
+    assert.equal(ciOf({ status: 'COMPLETED', conclusion: 'SUCCESS' }), 'pass', 'check run still passes');
+    console.log('PASS legacy status contexts classify like check runs');
+
+    const realGh = githubResponse;
+    const reset = () => {
+      view.pr = {}; view.act = {}; view.prNum = {}; view.retry = {}; view.tries = {};
+      view.ghDead = {}; view.holdUntil = 0; view.prSeen = new Set(); view.mergedDone = new Set();
+      view.asking = new Set(); view.polled = {};
+      view.git[key] = { ...repo, branch: 'feature' };
+      polledSpaces.length = 0;
+      polledSpaces.push({ id: 'test', name: 'feature', folder: cwd });
+    };
+    const url1063 = 'https://github.com/test/repo/pull/1063';
+    const node = (extra = {}) => ({
+      number: 1063, url: url1063, state: 'OPEN', mergeable: 'MERGEABLE', reviewDecision: '',
+      updatedAt: '2026-11-03T09:00:00Z', headRefName: 'feature', author: { login: 'me' },
+      commits: { nodes: [{ commit: { committedDate: '2026-11-03T08:00:00Z', statusCheckRollup: { contexts: {
+        nodes: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }],
+        pageInfo: { hasNextPage: false },
+      } } } }] },
+      ...extra,
+    });
+    const batchAnswer = (aliases, limit = { remaining: 4000, resetAt: new Date(Date.now() + 3600000).toISOString() }) =>
+      JSON.stringify({ data: { rateLimit: limit, repository: aliases } });
+    const isBatch = (args) => /pullRequest\(number:\d/.test(args.find(a => String(a).startsWith('query=')) ?? '');
+
+    // One batched query refreshes a known PR instead of gh's branch lookup.
+    reset();
+    fixture.reviewComments = [inline]; fixture.reviewThreads = []; fixture.commits = [];
+    view.prNum[key] = { number: 1063, url: url1063, branch: 'feature', open: true, at: Date.now() };
+    let batchCalls = 0, activityCalls = 0;
+    githubResponse = args => {
+      if (isBatch(args)) { batchCalls++; return { code: 0, stdout: batchAnswer({ p1063: node() }) }; }
+      if (args[0] === 'api' && !args.includes('graphql')) activityCalls++;
+      return realGh(args);
+    };
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(batchCalls, 1, 'one query carries every known PR in the repo');
+    assert.equal(view.pr[key].ci, 'fail', 'the batched status is published');
+    assert.equal(view.prNum[key].number, 1063);
+    assert.equal(activityCalls, 3, 'a new PR still reads its three activity lists');
+    console.log('PASS one batched query refreshes a known PR');
+
+    // Unchanged updatedAt: no activity lists at all.
+    activityCalls = 0; batchCalls = 0;
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(batchCalls, 1);
+    assert.equal(activityCalls, 0, 'an unchanged PR skips the three activity lists');
+    console.log('PASS unchanged PR skips activity');
+
+    // Resolution is re-read even though updatedAt did not move.
+    const attentionBefore = view.pr[key].commentCount;
+    let threadCalls = 0, activityAfter = 0;
+    githubResponse = args => {
+      if (isBatch(args)) return { code: 0, stdout: batchAnswer({ p1063: node() }) };
+      if (args.includes('graphql')) {
+        threadCalls++;
+        return { code: 0, stdout: JSON.stringify([{ data: { rateLimit: { remaining: 4000, resetAt: new Date(Date.now() + 3600000).toISOString() },
+          repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: true, comments: { nodes: [{ databaseId: 42 }] } }], pageInfo: { hasNextPage: false } } } } } }]) };
+      }
+      if (args[0] === 'api') activityAfter++;
+      return realGh(args);
+    };
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(threadCalls, 1, 'threads are asked about while a badge shows');
+    assert.equal(activityAfter, 0, 'and the activity lists still are not');
+    assert.equal(view.pr[key].commentCount, attentionBefore - 1, 'resolving the thread clears its comment without a push');
+    assert.ok(storage.get('github-spaces.comments').test.comments.length > 0, 'the cards stay after resolution');
+    console.log('PASS resolution is re-read without an updatedAt change');
+
+    // A late answer for a branch the person already left is dropped.
+    reset();
+    githubResponse = args => {
+      if (args[0] === 'pr') {
+        view.git[key] = { ...view.git[key], branch: 'moved-on' };
+        return { code: 0, stdout: JSON.stringify({ number: 8, url: 'https://github.com/test/repo/pull/8', state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], author: { login: 'me' }, commits: [], reviewDecision: '' }) };
+      }
+      return realGh(args);
+    };
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(view.pr[key], undefined, 'a late answer is not written onto the new branch');
+    assert.equal(view.polled[key], undefined, 'and it does not throttle the next look');
+    console.log('PASS a late answer never lands on a moved branch');
+
+    // A restart whose activity read fails keeps the saved cards.
+    reset();
+    storage.set('github-spaces.comments', { test: { pr: 'fixture#1063', at: '', revision: 'x', title: 'PR #1063 · test',
+      comments: [{ id: 'u1', at: '2026-11-03T07:00:00Z', author: 'rev', body: 'b', url: 'u1' }],
+      attentionIds: ['u1'], dismissedIds: [] } });
+    failedEndpoint = 'comments';
+    githubResponse = args => (args[0] === 'pr' ? { code: 0, stdout: JSON.stringify({ number: 1063, url: url1063, state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [{ conclusion: 'FAILURE' }], author: { login: 'me' }, commits: [], reviewDecision: '' }) } : realGh(args));
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(storage.get('github-spaces.comments').test.comments.length, 1, 'a failed first read keeps the saved cards');
+    assert.equal(storage.get('github-spaces.comments').test.attentionIds.length, 1, 'and their count');
+    assert.equal(view.pr[key].ci, 'fail', 'while the checks still refresh');
+    failedEndpoint = '';
+    console.log('PASS a failed activity read never erases saved cards');
+
+    // A confirmed no-PR hides the dock; a failure never does.
+    reset();
+    storage.set('github-spaces.comments', { test: { pr: 'fixture#1063', comments: [{}], attentionIds: [], dismissedIds: [] } });
+    githubResponse = args => (args[0] === 'pr' ? { code: 1, stderr: 'no pull requests found for branch "feature"' } : realGh(args));
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.equal(view.pr[key], null, 'no PR clears the mark');
+    assert.equal(storage.get('github-spaces.comments').test, undefined, 'and hides its dock');
+    console.log('PASS a confirmed no-PR hides the dock');
+
+    // An exhausted budget pauses polling and keeps every mark.
+    reset();
+    view.pr[key] = readPR(fixture, view.login);
+    githubResponse = () => ({ code: 1, stderr: 'GraphQL: API rate limit already exceeded' });
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    assert.ok(view.holdUntil > Date.now(), 'an exhausted budget stops the next poll');
+    assert.ok(view.pr[key]?.number === 1063, 'marks are kept, not cleared');
+    githubResponse = realGh;
+    console.log('PASS rate limit pauses polling and keeps marks');
+
+    // Two spaces in one checkout each get their own dock.
+    reset();
+    storage.set('github-spaces.comments', {});
+    polledSpaces.push({ id: 'test2', name: 'feature two', folder: cwd });
+    githubResponse = realGh;
+    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    const cards = storage.get('github-spaces.comments');
+    assert.ok(cards.test && cards.test2, 'both spaces on one checkout are written');
+    console.log('PASS two spaces on one checkout both get cards');
+
     async function verify(name, ahead, behind, red) {
       await view.check(key, {});
       const g = view.git[key];

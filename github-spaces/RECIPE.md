@@ -33,15 +33,23 @@ Determine each space's checkout from its first terminal's live folder, falling b
 
 Read branch and ahead/behind counts with `git status --porcelain=v2 --branch`. Use Git-directory watches and the existing sidebar refresh logic to update local state.
 
-Every two minutes, query known branches with:
+Every two minutes, refresh every known PR. Keep the PR number per checkout and ask for it by number:
 
-```sh
-gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,author
+```
+<alias>: pullRequest(number: <n>) { number url state mergeable reviewDecision updatedAt
+  headRefName author { login }
+  commits(last:1) { nodes { commit { committedDate statusCheckRollup {
+    contexts(first:100) { nodes { __typename ... on CheckRun { status conclusion }
+                                   ... on StatusContext { state } } pageInfo { hasNextPage } } } } } }
 ```
 
-Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder. Poll even when the window is not focused. If `gh` cannot start, back off that machine for 30 minutes. Known no-PR responses clear the PR mark; other command failures preserve the previous result.
+Send up to ten aliases in one `gh api graphql` call per repository, grouped by machine and repository. Verify `headRefName` still matches the checkout before publishing; on a miss, a changed head, a failed alias, or a malformed answer, fall back to `gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,author,commits,reviewDecision,updatedAt` in that checkout. Re-resolve merged and closed PRs every 30 minutes so a reused branch can acquire a new one.
 
-For checks, failure takes priority over running, then passing. The current implementation uses `conclusion`, falling back to `status`. An empty check list falls through to passing; do not describe this as proof that a PR is ready to merge.
+Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder, and write the answer to every space still on that checkout. Poll even when the window is not focused. Failures back off one place (2 s doubling to 30 min); only `gh` missing or unauthenticated pauses a machine for 30 minutes. Read the shared GraphQL budget out of each answer (`rateLimit { remaining resetAt }`) and stop polling until it resets rather than failing every cycle. Known no-PR responses clear the PR mark and its dock; other command failures preserve both. A status that arrives after the checkout moved must be dropped, not published.
+
+Fetch the three REST activity lists (issue comments, reviews, review comments) only when the PR's `updatedAt` changed since the last complete read, or when no complete read exists yet. A partial answer keeps the previous snapshot; it never reads as resolved.
+
+For checks, failure takes priority over running, then passing. Classify a check run by `conclusion`, falling back to `status`, and a legacy status context by its `state`. An empty check list falls through to passing; do not describe this as proof that a PR is ready to merge.
 
 For open PRs, `mergeable: "CONFLICTING"` overrides the CI mark with the orange conflict icon and a merge-conflict tooltip. Do not treat `UNKNOWN` as a conflict. Merged and closed marks take priority. Restore the CI mark when GitHub no longer reports conflicts.
 

@@ -43,6 +43,8 @@ Requires Herdr, Git, and [GitHub CLI](https://cli.github.com/) authenticated wit
 
 Herdr reloads saved changes automatically. PR lookups run every two minutes, including in the background; allow a polling cycle for marks to appear.
 
+Known PRs are refreshed with one batched request per repository. Comment history is fetched only when the PR reports a change, and thread resolution is re-read while a badge is showing. Merged and closed PRs are re-resolved every 30 minutes. If the shared GraphQL budget runs out, polling pauses until it resets — hover **Spaces** for the resume time; marks stay as they were.
+
 ## Read the sidebar
 
 ### PR marks
@@ -115,7 +117,8 @@ Add five `floating` entries (slot 0–4) to the work-area block in your personal
 ## Limits and troubleshooting
 
 - **No PR marks:** wait for a polling cycle, then run `gh pr view` from the checkout. Confirm the branch has a PR and `gh` has access.
-- **Remote spaces:** Git and `gh` run on that space's machine. If `gh` cannot start, lookups on that machine pause for 30 minutes. Authentication failures also prevent fresh results.
+- **Remote spaces:** Git and `gh` run on that space's machine. A place whose folder is gone retries with its own growing delay; only a machine where `gh` is missing or not signed in pauses for 30 minutes. Authentication failures also prevent fresh results.
+- **Rate limits:** the GraphQL budget is read from the answers themselves. Below 120 points, polling stops until the reset time and the **Spaces** header says when it resumes. Marks keep their last value.
 - **Unexpected grouping:** the mod uses the first terminal's live folder, falling back to the saved folder—not the space's display name.
 - **Checks:** an empty check list currently counts as passing. Green is not a guarantee of merge readiness.
 - **Comments:** discussion comments, nonempty submitted review summaries, and inline replies are checked every two minutes. Bot accounts, usernames containing `bot` (case-insensitive), your own account's comments, and the PR creator's comments are excluded from both cards and badge. A commit newer than a comment clears it from the badge (cards remain). Edits are not tracked. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
