@@ -7,7 +7,7 @@ Personal mods for [Herdr](https://herdr.dev), packaged for the [mods gallery](ht
 | Mod | What it does | Docs |
 | --- | --- | --- |
 | **GitHub Spaces** | Replaces the Spaces sidebar with PR status, comment badges, worktree cleanup prompts, and a fetch/rebase button. | [Install and use →](github-spaces/README.md) · [Build recipe](github-spaces/RECIPE.md) · [Source](github-spaces/mods/github-spaces/main.js) |
-| **Branch review** | Native tab: changed-file tree, one diff at a time, syntax colours, Split/Unified, editable base. | [Install and use →](branch-review/README.md) · [Source](branch-review/mods/branch-review/main.js) |
+| **Branch review** | Native tab: changed-file tree, one diff at a time, local Prism syntax colours, Split/Unified, editable base. | [Install and use →](branch-review/README.md) · [Source](branch-review/mods/branch-review/main.js) |
 
 Each mod's own README covers its marks, controls, notifications, and limits.
 
@@ -16,7 +16,6 @@ Each mod's own README covers its marks, controls, notifications, and limits.
 - [Herdr](https://herdr.dev).
 - [Git](https://git-scm.com/) for both mods; run `git fetch` yourself before comparing with a remote base.
 - The [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with `gh auth status`, for GitHub Spaces.
-- Optional: the **gitview** mod's local diff engine for syntax colours in Branch review. Without it, Branch review still works with plain red/green diffs.
 
 Mods run trusted code: one that queries a service or runs commands does so with your credentials. Each mod's README says what it touches.
 

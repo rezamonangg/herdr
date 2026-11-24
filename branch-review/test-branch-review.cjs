@@ -58,18 +58,20 @@ async function main() {
 
     const cx = {
       focus_handle: () => ({ focus() {}, is_focused: () => false }),
-      spawn: (fn) => fn(cx), notify() {},
+      spawn: (fn) => fn(cx), notify() {}, sleep: async () => {},
     };
-    const view = vm.runInNewContext(`${source}\n({ BranchReview, parseNameStatus, parseNumstat, parseUnified, splitRows, codeSpans, treeRows, fileEntries, rankRefs })`, {
+    const view = vm.runInNewContext(`${source}\n({ BranchReview, parseNameStatus, parseNumstat, parseUnified, splitRows, treeRows, fileEntries, rankRefs })`, {
       View: class {},
       div: () => ({ when() { return this; } }), h_flex: () => ({ when() { return this; } }), v_flex: () => ({ when() { return this; } }),
       Scrollbar: { vertical: () => ({}) }, v_virtual_list: () => ({}),
-      checking: () => true, exec, appHome: () => dir, readTextFile: async () => null,
+      checking: () => true, exec, appHome: () => dir, readTextFile: async (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } },
       settings: () => ({ font_size: 13, font_family: 'mono' }), theme: () => ({ background: '#111111' }),
       focused: () => ({ tab: 't1', pane: null, cwd: repo, space: 's1' }),
       panes: () => [],
       spaces: () => [{ id: 's1', active: true, folder: repo, machine: null, tabs: [{ id: 't1', active: true }] }],
       props: () => ({}), shared: (k) => storage.get(k), setShared: (k, v) => storage.set(k, v),
+      colorRows: (rows) => { for (const row of rows) if (row.m !== undefined) row.code = [[row.m, null]]; return rows.length; },
+      languageFor: () => null,
       run: () => null,
     }, { timeout: 3000 });
 
@@ -83,27 +85,22 @@ async function main() {
       ['origin/main', 'main', 'origin/release']);
     console.log('PASS git formats and base ordering');
 
-    assert.deepEqual(JSON.parse(JSON.stringify(view.codeSpans([['▌', 'green', '@ins'], ['  12 ', '@gutter', null], ['x', '#fff', '@ins']]))),
-      [['x', '#fff', '@ins']], 'marker and gutter are stripped');
-    assert.deepEqual(JSON.parse(JSON.stringify(view.codeSpans([['  12 ', '@gutter', null], ['a', '#fff', null]]))),
-      [['a', '#fff', null]], 'context gutter is stripped');
-
     const rows = [
       { k: 'fold', text: '⋯' },
-      { k: 'del', o: 1, n: null, s: [['▌'], [' 1 '], ['old']] },
-      { k: 'add', o: null, n: 1, s: [['▌'], [' 1 '], ['new']] },
-      { k: 'ctx', o: 2, n: 2, s: [['  2 '], ['same']] },
-      { k: 'del', o: 3, n: null, s: [['▌'], [' 3 '], ['gone']] },
+      { k: 'del', o: 1, n: null, m: 'old' },
+      { k: 'add', o: null, n: 1, m: 'new' },
+      { k: 'ctx', o: 2, n: 2, m: 'same' },
+      { k: 'del', o: 3, n: null, m: 'gone' },
     ];
     const split = view.splitRows(rows);
     assert.equal(split[0].k, 'fold');
     assert.equal(split[1].k, 'pair');
-    assert.equal(split[1].d.s[2][0], 'old');
-    assert.equal(split[1].a.s[2][0], 'new');
+    assert.equal(split[1].d.m, 'old');
+    assert.equal(split[1].a.m, 'new');
     assert.equal(split[2].k, 'ctx');
     assert.equal(split[3].k, 'pair');
     assert.equal(split[3].a, null, 'an unpaired deletion has a blank right side');
-    console.log('PASS colour spans and split pairing');
+    console.log('PASS split pairing');
 
     const tree = view.treeRows([{ path: 'src/a.txt' }, { path: 'src/deep/b.txt' }, { path: 'root.txt' }]);
     assert.deepEqual(JSON.parse(JSON.stringify(tree.map((r) => [r.k, r.depth, r.k === 'dir' ? r.name : r.file.path]))),
@@ -121,6 +118,16 @@ async function main() {
     assert.ok(review.rows.some((r) => r.k === 'del' || r.k === 'add'), 'the fallback plain diff has rows');
     assert.equal(review.where.base.merge_base, git('merge-base', 'origin/main', 'HEAD'));
     console.log('PASS load: files, untracked, rename, plain fallback diff');
+
+    await review.pick(cx, review.files.find((f) => f.path === 'src/feature.txt'));
+    assert.equal(review.oneSided, 'new', 'an added file is shown as one side');
+    await review.pick(cx, review.files.find((f) => f.path === 'drop.txt'));
+    assert.equal(review.oneSided, 'old', 'a deleted file is shown as one side');
+    await review.pick(cx, review.files.find((f) => f.path === 'scratch.txt'));
+    assert.equal(review.oneSided, 'new', 'an untracked file is one-sided');
+    assert.equal(review.rows.map((r) => r.m).join('\n'), 'untracked', 'untracked content is read directly');
+    await review.pick(cx, review.files.find((f) => f.path === 'src/keep.txt'));
+    assert.equal(review.oneSided, null, 'a file with both sides uses the split view');
 
     await review.choose(cx, 'release');
     assert.ok(!review.files.some((f) => f.path === 'main-only.txt'), 'the base changes the file list');

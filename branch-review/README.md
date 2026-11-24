@@ -6,7 +6,7 @@ It reads `git diff <merge-base(base, HEAD)>`, so it includes uncommitted edits. 
 
 ## Install
 
-Requires Herdr and Git. For colours it uses the **gitview** engine if installed; without it the same view renders in plain red/green.
+Requires Herdr and Git. No other mod.
 
 1. Copy the mod:
 
@@ -36,26 +36,43 @@ Herdr loads new key bindings at start: quit and reopen once after adding the key
 
 - Left: changed files as a tree, with `M`, `A`, `D`, `R`, `U` and `+`/`−`.
 - Click a file: its diff opens on the right.
-- **Split** / **Unified** buttons switch layouts.
+- **Split** / **Unified** buttons switch layouts. Added and deleted files use one full-width column, because the other side does not exist.
+- The plain diff appears first; syntax colours arrive a moment later. Large files never hide the diff behind a spinner.
 - Click `vs origin/main` to pick another base. The choice is remembered per checkout.
 - `↺` reloads after a commit, edit, or fetch.
 - **Escape** closes the base list.
 
 ## How it is built
 
-The file list is plain Git (`name-status`, `numstat`, untracked files). The coloured rows come from gitview's local diff engine, already on this machine:
+The file list and each patch are plain Git (`name-status`, `numstat`, `git diff`). For the selected file, the old side comes from the merge-base blob and the new side from the working file. A pinned local **Prism 1.30.0** (MIT, `vendor/prism.js`) tokenises each complete side once; its tokens become coloured spans in GPUI. No external process, no terminal escape codes, no gitview.
 
-```sh
-herdr-gitview json diff --merge-base <sha> --base <label> --path <path> --kind <kind>
+A row is coloured only when the highlighted line joins back to exactly the patch text. A mismatch, unknown language, binary file, side over 128 KiB, or a Prism failure leaves the row plain.
+
+The vendor copy is **PrismJS 1.30.0**, MIT (`vendor/LICENSE.prism`), with core plus clike, markup, javascript, typescript, go, python, bash, yaml, json, and markdown. SHA-256 of `vendor/prism.js`:
+
+```
+88a8085b6a7006b0ce250333b191e43545e13491ea9bdb6e4006eeeb19c707cd
 ```
 
-That engine returns syntax-coloured spans, line numbers, renames, binary and truncation flags. This mod pairs them for side-by-side and draws them in GPUI. If the engine is missing, it falls back to plain `git diff` rows, so the tab still works without gitview.
+To update: rebuild the same core-plus-languages bundle from the pinned npm package, replace `vendor/prism.js` and `vendor/LICENSE.prism`, update the hash here, and rerun both checks.
 
 ## Limits
 
-- Local machine only. A remote space needs Git (and the engine) on that machine.
+- Local machine only. A remote space needs Git on that machine.
 - No GitHub PR metadata, comments, or notes.
 - No automatic fetch; run `git fetch` first.
 - Fork PRs need the commit checked out.
-- Diffs are capped by the engine at 5,000 rows; very long lines are clipped.
-- The engine's JSON shape is private to gitview. If it changes, colours may fail; the plain fallback still renders.
+- Highlighting is skipped for a side over 128 KiB; the plain diff still shows.
+- Prism runs synchronously. Very large files are capped rather than offloaded.
+- Highlighting covers the languages in the vendor list; anything else is plain.
+
+## Development
+
+From the repository root:
+
+```sh
+node branch-review/test-branch-review.cjs
+node branch-review/test-syntax.cjs
+herdr-app check branch-review/mods/branch-review
+herdr-app check ~/.config/herdr-app/mods/branch-review
+```

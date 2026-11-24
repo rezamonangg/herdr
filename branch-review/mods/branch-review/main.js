@@ -1,18 +1,18 @@
 // Native branch review: changed files on the left, one file's coloured diff
-// on the right. Colours come from gitview's local diff engine when it is
-// installed; without it the same rows fall back to plain text. Local only:
-// no fetch, no GitHub calls.
+// on the right. Colours come from a small built-in highlighter. Local only:
+// no fetch, no GitHub calls, no external renderer.
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, Scrollbar, v_virtual_list } from "gpui-base";
-import { appHome, checking, closeOverlay, exec, focused, panes, props, readTextFile, run, setShared, settings, shared, spaces, theme } from "herdr";
+import { checking, closeOverlay, exec, focused, panes, props, readTextFile, run, setShared, settings, shared, spaces, theme } from "herdr";
+import { colorRows, languageFor } from "./syntax.js";
 
 const PROBES = ["origin/main", "origin/master", "origin/next", "origin/develop", "master", "develop"];
 const BASE_KEY = "branch-review.base";
 const TREE_WIDTH = 300;
 const ROW = 18;
 
-// ---- git and engine --------------------------------------------------------
+// ---- git ------------------------------------------------------------------
 
 function tokens(buf) {
   const out = [];
@@ -128,16 +128,7 @@ export function treeRows(files, collapsed = new Set()) {
   return out;
 }
 
-// ---- rows from the engine --------------------------------------------------
-
-// The engine prefixes a marker and a gutter to each line. Drop both; the
-// split view draws its own numbers, and unified uses the row's o/n.
-export function codeSpans(s) {
-  let i = 0;
-  if (s?.[0]?.[0] === "▌") i = 1;
-  if (s?.[i]?.[1] === "@gutter") i++;
-  return (s ?? []).slice(i).filter(([text]) => text !== "");
-}
+// ---- rows ------------------------------------------------------------------
 
 // Changed lines paired left/right. Context is both sides; folds and the
 // truncation marker stay full width.
@@ -165,6 +156,8 @@ export function splitRows(rows) {
   return out;
 }
 
+const untab = (text) => text.replace(/[^\t]*\t/g, (x) => x.slice(0, -1).padEnd((x.length - 1) - (x.length - 1) % 4 + 4));
+
 export function parseUnified(text) {
   const all = String(text ?? "").split("\n");
   const first = all.findIndex((l) => l.startsWith("@@"));
@@ -183,53 +176,28 @@ export function parseUnified(text) {
     if (raw.startsWith("\\")) continue;
     const kind = raw[0];
     const text = raw.slice(1);
-    if (kind === "-") rows.push({ k: "del", o: o++, n: null, m: text, s: [[text, null, null]] });
-    else if (kind === "+") rows.push({ k: "add", o: null, n: n++, m: text, s: [[text, null, null]] });
-    else if (kind === " ") rows.push({ k: "ctx", o: o++, n: n++, m: text, s: [[text, null, null]] });
+    if (kind === "-") rows.push({ k: "del", o: o++, n: null, m: untab(text).replace(/\r$/, "") });
+    else if (kind === "+") rows.push({ k: "add", o: null, n: n++, m: untab(text).replace(/\r$/, "") });
+    else if (kind === " ") rows.push({ k: "ctx", o: o++, n: n++, m: untab(text).replace(/\r$/, "") });
   }
   return rows;
 }
 
-function color(c, t) {
-  switch (c) {
-    case "red": return t.ansi1;
-    case "green": return t.ansi2;
-    case "@ins": return `${t.ansi2}26`;
-    case "@del": return `${t.ansi1}26`;
-    case "@ins_emph": return `${t.ansi2}5c`;
-    case "@del_emph": return `${t.ansi1}5c`;
-    case "@gutter": return t.dim;
-    case "@fold": return t.raised;
-    case "@fold_fg": return t.muted;
-    default: return c;
+function roleColor(role, t) {
+  switch (role) {
+    case "kw": return t.ansi5 ?? t.ansi3;
+    case "str": return t.ansi2;
+    case "com": return t.muted ?? t.dim;
+    case "num": return t.ansi3;
+    case "type": return t.ansi4;
+    case "key": return t.ansi4;
+    default: return null;
   }
 }
 
 const charWidth = (size) => size * 0.64;
 const rowHeight = (size) => Math.ceil(size * 1.8);
 const message = (e) => String(e?.message ?? e);
-const isDark = (hex) => {
-  const n = parseInt(String(hex).slice(1, 7), 16);
-  if (Number.isNaN(n)) return true;
-  return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) < 128;
-};
-
-let config;
-async function engine(args) {
-  if (config === undefined) {
-    const text = await readTextFile(`${appHome()}/mods/gitview/config.json`);
-    config = text ? JSON.parse(text) : null;
-    if (!config?.bin) throw new Error("gitview's engine is not installed");
-  }
-  const env = ["GITVIEW_HOST=app", `HERDR_APP_HOME=${appHome()}`];
-  if (config.herdr_app) env.push(`GITVIEW_HERDR_APP=${config.herdr_app}`);
-  if (config.hc) env.push(`GITVIEW_HC=${config.hc}`);
-  const r = await exec("/usr/bin/env", [...env, config.bin, "json", ...args]);
-  let out = null;
-  try { out = JSON.parse(r.stdout); } catch { /* reported below */ }
-  if (r.code !== 0 || out?.error) throw new Error(out?.error ?? (r.stderr || r.stdout || `exit ${r.code}`).trim());
-  return out;
-}
 
 // ---- where -----------------------------------------------------------------
 
@@ -325,6 +293,7 @@ export default class BranchReview extends View {
     this.sel = null;
     this.rows = [];
     this.diffMode = "split";
+    this.oneSided = null;
     this.diffNote = null;
     this.diffLoading = false;
     this.diffSeq = 0;
@@ -333,6 +302,7 @@ export default class BranchReview extends View {
     this.displayFor = null;
     this.displayMode = null;
     this.displayLongest = 0;
+    this.displayOne = null;
     this.ctx = null;
     this.loading = false;
     this.error = null;
@@ -466,42 +436,64 @@ export default class BranchReview extends View {
     if (cached) {
       if (this.sel === file.path) {
         this.rows = cached.rows;
+        this.oneSided = cached.one ?? null;
         this.diffLoading = false;
         cx.notify();
       }
       return;
     }
     this.rows = [];
+    this.oneSided = null;
     cx.notify();
-    const dark = isDark(theme().background);
     try {
-      const args = ["diff", "--repo", this.where.root, "--root", "--path", file.path, "--kind", file.kind, "--theme", dark ? "dark" : "light", "--merge-base", this.where.base.merge_base, "--base", this.where.base.label];
-      if (file.orig) args.push("--orig", file.orig);
+      const ctx = { cwd: this.ctx.cwd, on: this.ctx.on };
+      const oldPath = file.orig ?? file.path;
+      const wantOld = file.kind !== "added" && file.kind !== "untracked";
+      const wantNew = file.kind !== "deleted";
+      const paths = file.orig ? ["--", file.path, file.orig] : ["--", file.path];
+      const [r, oldText, newText] = await Promise.all([
+        git(["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "-M", this.where.base.merge_base, ...paths], ctx),
+        wantOld ? git(["show", `${this.where.base.merge_base}:${oldPath}`], ctx) : null,
+        wantNew ? readTextFile(`${this.where.root}/${file.path}`, { on: this.where.on }).catch(() => null) : null,
+      ]);
+      if (r.code !== 0) throw new Error((r.stderr || r.stdout || "git diff failed").trim());
       let rows;
-      let hash = null;
-      try {
-        const out = await engine(args);
-        rows = out.rows ?? [];
-        hash = out.hash ?? null;
-        if (out.binary) this.diffNote = "Binary file";
-        if (out.empty && !rows.length) this.diffNote = "No text changes";
-        if (out.truncated) rows = [...rows, { k: "cut", n: rows.length }];
-      } catch (e) {
-        // No engine: the same view in plain text, no syntax colours.
-        const ctx = { cwd: this.ctx.cwd, on: this.ctx.on };
-        const paths = file.orig ? ["--", file.path, file.orig] : ["--", file.path];
-        const r = await git(["diff", "--no-ext-diff", "--no-textconv", "--no-color", "-U3", "-M", this.where.base.merge_base, ...paths], ctx);
-        if (r.code !== 0) throw new Error(message(e));
+      if (file.kind === "untracked") {
+        rows = typeof newText === "string" && !newText.includes("\0")
+          ? newText.replace(/\n$/, "").split("\n").map((line, i) => ({ k: "add", o: null, n: i + 1, m: untab(line).replace(/\r$/, "") }))
+          : [];
+      } else {
         rows = parseUnified(r.stdout);
-        if (!rows.length) this.diffNote = file.add === null && file.del === null ? "Binary file" : "No text changes";
       }
+      const hasAdd = rows.some((row) => row.k === "add");
+      const hasDel = rows.some((row) => row.k === "del");
+      const hasCtx = rows.some((row) => row.k === "ctx");
+      this.oneSided = !hasDel && !hasCtx ? "new" : !hasAdd && !hasCtx ? "old" : null;
+      if (!rows.length) this.diffNote = file.add === null && file.del === null ? "Binary file" : "No text changes";
       if (token !== this.diffSeq) return;
+
+      // Show the plain rows first; whole-file Prism tokenising happens after
+      // the frame is painted, so a large file never hides the diff.
       this.rows = rows;
-      this.cache.set(cacheKey, { rows, hash });
+      this.diffLoading = false;
+      cx.notify();
+      await cx.sleep(0);
+      if (token !== this.diffSeq) return;
+      try {
+        colorRows(rows, {
+          oldText: wantOld && oldText?.code === 0 ? oldText.stdout : null,
+          newText: newText ?? null,
+          oldLang: languageFor(oldPath),
+          newLang: languageFor(file.path),
+        });
+      } catch { /* leave the plain rows */ }
+      if (token !== this.diffSeq) return;
+      this.cache.set(cacheKey, { rows, one: this.oneSided });
+      cx.notify();
     } catch (e) {
       if (token === this.diffSeq) {
-        this.diffNote = message(e);
         this.rows = [];
+        this.diffNote = message(e);
       }
     } finally {
       if (token === this.diffSeq) {
@@ -514,20 +506,23 @@ export default class BranchReview extends View {
   pick(cx, file) {
     if (!file) return;
     this.sel = file.path;
-    return this.loadDiff(cx, file);
+    // A click's context ends when its handler returns: the diff and its
+    // notify need a spawned task, not that callback's `cx`.
+    return cx.spawn((cx) => this.loadDiff(cx, file));
   }
 
   // Rows and their plain-text width are expensive to derive; do it when the
   // diff or mode changes, not on every hover/click render.
   display() {
-    if (this.displayFor === this.rows && this.displayMode === this.diffMode) return this.displayRows;
+    if (this.displayFor === this.rows && this.displayMode === this.diffMode && this.displayOne === this.oneSided) return this.displayRows;
     this.displayFor = this.rows;
     this.displayMode = this.diffMode;
-    const rows = this.diffMode === "split" ? splitRows(this.rows) : this.rows;
+    this.displayOne = this.oneSided;
+    const rows = this.diffMode === "split" && !this.oneSided ? splitRows(this.rows) : this.rows;
     let longest = 0;
     const prep = (row) => {
       if (!row) return;
-      if (!row.code) row.code = codeSpans(row.s);
+      if (!row.code) row.code = row.m === undefined ? [] : [[row.m, null]];
       longest = Math.max(longest, row.code.reduce((n, [text]) => n + text.length, 0));
     };
     for (const row of rows) {
@@ -565,8 +560,9 @@ export default class BranchReview extends View {
     const size = settings().font_size;
     const rows = this.display();
     const longest = this.displayLongest;
-    const width = this.diffMode === "split" ? Math.max(500, longest * charWidth(size) * 2 + 90) : Math.max(320, longest * charWidth(size) + 70);
-    const listId = `br-diff-${hash(`${this.sel}:${this.diffMode}`)}`;
+    const split = this.diffMode === "split" && !this.oneSided;
+    const width = split ? Math.max(500, longest * charWidth(size) * 2 + 90) : Math.max(320, longest * charWidth(size) + 70);
+    const listId = `br-diff-${hash(`${this.sel}:${this.diffMode}:${this.oneSided ?? ""}`)}`;
 
     return v_flex()
       .id("branch-review")
@@ -763,10 +759,13 @@ export default class BranchReview extends View {
       .when(file.add !== null && file.add > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${file.add}`)))
       .when(file.del !== null && file.del > 0, (e) => e.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${file.del}`)))
       .child(div().flex_1())
-      .child(
-        h_flex().flex_none().h(19).rounded(4).bg(t.raised).text_size(10).overflow_hidden()
-          .child(this.modeButton(t, "split", "Split", cx))
-          .child(this.modeButton(t, "unified", "Unified", cx))
+      .when(Boolean(this.oneSided), (e) => e.child(div().flex_none().text_size(10).text_color(t.dim).child(this.oneSided === "new" ? "new file" : "deleted file")))
+      .when(!this.oneSided, (e) =>
+        e.child(
+          h_flex().flex_none().h(19).rounded(4).bg(t.raised).text_size(10).overflow_hidden()
+            .child(this.modeButton(t, "split", "Split", cx))
+            .child(this.modeButton(t, "unified", "Unified", cx))
+        )
       );
   }
 
@@ -788,13 +787,13 @@ export default class BranchReview extends View {
   diffRow(row, t, size) {
     const h = rowHeight(size);
     if (row.k === "fold") {
-      const text = row.text ?? codeSpans(row.s).map(([x]) => x).join("");
+      const text = row.text ?? "";
       return div().w_full().h(h).flex_none().px(8).truncate().bg(t.raised).text_size(size - 2).text_color(t.dim).child(text);
     }
     if (row.k === "cut") {
       return div().w_full().h(h).flex_none().px(8).text_size(size - 2).text_color(t.dim).child("diff cut");
     }
-    if (this.diffMode === "split") {
+    if (this.diffMode === "split" && !this.oneSided) {
       return h_flex().w_full().h(h).flex_none()
         .child(this.cell(t, size, row.d, row.d?.o, row.d ? "del" : null))
         .child(div().w(1).flex_none().bg(t.border))
@@ -826,12 +825,10 @@ export default class BranchReview extends View {
   }
 
   spans(row, t) {
-    return (row?.code ?? codeSpans(row?.s)).map(([text, fg, bg]) =>
-      div().flex_none()
-        .when(Boolean(fg), (e) => e.text_color(color(fg, t)))
-        .when(Boolean(bg), (e) => e.bg(color(bg, t)))
-        .child(text.replace(/ /g, "\u00a0"))
-    );
+    return (row?.code ?? []).map(([text, role]) => {
+      const fg = roleColor(role, t);
+      return div().flex_none().when(Boolean(fg), (e) => e.text_color(fg)).child(text.replace(/ /g, "\u00a0"));
+    });
   }
 
   gutter(size) {
