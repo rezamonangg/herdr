@@ -2,20 +2,20 @@
 
 Personal mods for [Herdr](https://herdr.dev), packaged for the [mods gallery](https://herdr.dev/mods/).
 
-## GitHub Spaces
+## Mods
 
-Replace the Spaces sidebar with GitHub PR status, comment badges, worktree cleanup prompts, and a fetch/rebase button.
+| Mod | What it does | Docs |
+| --- | --- | --- |
+| **GitHub Spaces** | Replaces the Spaces sidebar with PR status, comment badges, worktree cleanup prompts, and a fetch/rebase button. | [Install and use →](github-spaces/README.md) · [Build recipe](github-spaces/RECIPE.md) · [Source](github-spaces/mods/github-spaces/main.js) |
 
-- **PR status:** orange merge conflicts, red failed checks, yellow running checks, green passing checks, purple merged PRs.
-- **Branch status:** blue download arrow by default; red arrow and count when strictly behind the configured upstream.
-- **Feedback:** a human-comment count and persistent latest-five dock with GitHub links; a removal prompt when a worktree's PR merges.
+Each mod's own README covers its marks, controls, notifications, and limits.
 
-**[Install and use GitHub Spaces →](github-spaces/README.md)**
+## Requirements
 
-[Build recipe](github-spaces/RECIPE.md) · [Source](github-spaces/mods/github-spaces/main.js)
+Herdr, plus whatever that mod's README lists. GitHub Spaces needs Git and an authenticated GitHub CLI (`gh`).
 
-Requires Herdr, Git, and an authenticated GitHub CLI (`gh`). Mods run trusted code: this one queries GitHub and runs Git commands.
+Mods run trusted code: one that queries a service or runs commands does so with your credentials. Each mod's README says what it touches.
 
 ## Repository layout
 
-Each mod has its own folder containing user documentation, a `RECIPE.md` build brief, a `preview.png`, and `mods/<name>/` installable files. No replacement layout or key bindings are included.
+Each mod has its own folder containing user documentation, a `RECIPE.md` build brief, a `preview.png`, the installable files under `mods/<name>/`, and a regression check where one exists. No replacement layout or key bindings are included.
