@@ -12,7 +12,8 @@ Each mod's own README covers its marks, controls, notifications, and limits.
 
 ## Requirements
 
-Herdr, plus whatever that mod's README lists. GitHub Spaces needs Git and an authenticated GitHub CLI (`gh`).
+- [Herdr](https://herdr.dev).
+- [Git](https://git-scm.com/) and the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with `gh auth status`, for GitHub Spaces.
 
 Mods run trusted code: one that queries a service or runs commands does so with your credentials. Each mod's README says what it touches.
 
