@@ -46,6 +46,7 @@ async function main() {
     const source = fs.readFileSync(path.join(__dirname, 'mods/github-spaces/main.js'), 'utf8')
       .replace(/^import .*;$/gm, '').replace(/export default class /, 'class ').replace(/^export /gm, '');
     const { GitHubInfo, readPR } = vm.runInNewContext(`${source}\n({ GitHubInfo, readPR })`, {
+      console,
       View: class {}, div: () => element('div'), h_flex: () => element('row'),
       svg: (p) => element(p), exec,
       notify: n => toasts.push(n),
@@ -192,13 +193,20 @@ async function main() {
       return { code: 0, stdout: JSON.stringify([[], rows]) };
     };
     const tasks = [];
-    const cx = { spawn: fn => tasks.push(fn({ notify() {} })) };
+    // Every spawned context can spawn again, as the real host's does: the REST
+    // discovery path hands its own cx to the number batch.
+    const ctx = () => ({
+      notify() {},
+      spawn: fn => tasks.push(fn(ctx())),
+      timer: { after() {}, every() {} },
+    });
+    const cx = ctx();
     // Lookups run a few at a time, so a wave may spawn the next one only after
     // the previous settles: drain the queue, not just the promises captured.
     const settle = async () => {
       for (let i = 0; i < 200; i++) {
+        if (!tasks.length && !view.queue?.length && !view.running) return;
         await Promise.all(tasks.splice(0));
-        if (!view.queue?.length && !view.running) return;
       }
     };
     view.pollPRs(cx); await settle();
@@ -377,6 +385,7 @@ async function main() {
     assert.equal(activityCalls, 0, 'an unchanged PR skips the three activity lists');
     console.log('PASS unchanged PR skips activity');
 
+
     // Resolution is re-read even though updatedAt did not move.
     const attentionBefore = view.pr[key].commentCount;
     let threadCalls = 0, activityAfter = 0;
@@ -396,6 +405,36 @@ async function main() {
     assert.equal(view.pr[key].commentCount, attentionBefore - 1, 'resolving the thread clears its comment without a push');
     assert.ok(storage.get('github-spaces.comments').test.comments.length > 0, 'the cards stay after resolution');
     console.log('PASS resolution is re-read without an updatedAt change');
+
+    // A branch with no cached number: one REST list call finds its PR, then one
+    // number batch carries the status. Not `gh pr view` per branch.
+    reset();
+    view.git[key] = { ...view.git[key], slug: 'test/repo' };
+    let restLists = 0, numberBatches = 0;
+    githubResponse = args => {
+      if (args[0] === 'api' && args.some(a => String(a).includes('/pulls?state=all'))) {
+        restLists++;
+        return { code: 0, stdout: JSON.stringify([[{ number: 1063, html_url: url1063, state: 'open',
+          head: { ref: 'feature' }, updated_at: '2026-11-03T09:00:00Z' }]]) };
+      }
+      if (isBatch(args)) { numberBatches++; return { code: 0, stdout: batchAnswer({ p1063: node({ baseRefName: 'main' }) }) }; }
+      return realGh(args);
+    };
+    tasks.length = 0; view.pollPRs(cx); await settle();
+    assert.equal(restLists, 1, 'one REST list discovers the branch\'s PR');
+    assert.equal(numberBatches, 1, 'one number batch carries its status');
+    assert.equal(view.pr[key].number, 1063, 'the discovered PR is published');
+    assert.equal(view.pr[key].base, 'main', 'its base branch comes back for stacking');
+    console.log('PASS REST discovery plus one number batch');
+
+    // An empty page (fewer than 100 PRs) means this branch has no PR.
+    view.pr = {}; view.prNum = {}; view.asking = new Set(); view.lastPrs = undefined; view.published = null;
+    githubResponse = args => (args[0] === 'api' && args.some(a => String(a).includes('/pulls?state=all')))
+      ? { code: 0, stdout: JSON.stringify([[]]) } : realGh(args);
+    tasks.length = 0; view.pollPRs(cx); await settle();
+    assert.equal(view.pr[key], null, 'a short page clears the mark for a branch with no PR');
+    githubResponse = realGh;
+    console.log('PASS a branch absent from a short REST page has no PR');
 
     // A late answer for a branch the person already left is dropped.
     reset();

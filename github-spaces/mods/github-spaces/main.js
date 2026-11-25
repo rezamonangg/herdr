@@ -187,9 +187,9 @@ export default class GitHubInfo extends View {
     this.prSeen.delete(key);
   }
 
-  // One repo, on demand: every branch there is asked again, ignoring the
-  // throttle and the number cache. Asked for by the sidebar's row control, one
-  // repo at a time; there is no global refresh.
+  // One repo, on demand: every branch there is asked again now. Known PRs go
+  // through the number batch, the rest through one head-ref batch, so a refresh
+  // costs about two GraphQL queries per repo, not one per branch.
   refreshRepo(repo, cx) {
     if (Date.now() < this.holdUntil) {
       notify({ title: "GitHub paused", body: `Rate limit: PR marks resume ${new Date(this.holdUntil).toISOString().slice(11, 16)} UTC.`, level: "warning", timeout: 8000 });
@@ -197,7 +197,7 @@ export default class GitHubInfo extends View {
     }
     for (const [key, g] of Object.entries(this.git)) {
       if (g.repo !== repo) continue;
-      delete this.prNum[key]; delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
+      delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
     }
     this.pollPRs(cx, (k) => this.git[k]?.repo === repo);
   }
@@ -238,7 +238,9 @@ export default class GitHubInfo extends View {
       (hit ? known : rest).push(j);
     }
     for (let i = 0; i < known.length; i += BATCH) this.batch(known.slice(i, i + BATCH), group, cx);
-    for (const j of rest) this.pollOne(j, cx);
+    // Branches with no cached number are resolved by head ref, one query per
+    // repo chunk, instead of `gh pr view` per branch (30 candidates each).
+    for (let i = 0; i < rest.length; i += BATCH) this.batchBranches(rest.slice(i, i + BATCH), group, cx);
   }
 
   // One GraphQL answer for several known PRs in the same repo.
@@ -277,6 +279,50 @@ export default class GitHubInfo extends View {
         // A broken batch costs one cycle, not every mark in the repo.
         if (Date.now() < this.holdUntil) return;
         for (const j of jobs) { delete this.prNum[j.key]; if (this.canAsk(j)) await this.lookup(j); }
+      } finally {
+        for (const j of jobs) this.markDone(j.key);
+        cx.notify();
+      }
+    });
+  }
+
+  // Several branches with no cached PR number, discovered in one REST call:
+  // GET /repos/{owner}/{repo}/pulls?state=all lists every PR and its head ref.
+  // REST GETs cost one point of a 5,000/hour budget, where `gh pr view` per
+  // branch asked for 30 candidates plus commit history each.
+  batchBranches(jobs, group, cx) {
+    const slug = jobs.map(j => j.g.slug ?? this.git[j.key]?.slug).find(Boolean);
+    const [owner, name] = String(slug ?? "").split("/");
+    if (!owner || !name) { for (const j of jobs) this.pollOne(j, cx); return; } // no remote known: the long way
+    for (const j of jobs) this.mark(j.key);
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("gh", ["api", "--hostname", "github.com",
+          `repos/${owner}/${name}/pulls?state=all&per_page=100&sort=updated&direction=desc`, "--slurp"], { on: group.on });
+        if (r.code !== 0) throw new Error(r.stderr || "gh api failed");
+        const pages = JSON.parse(r.stdout);
+        const prs = (Array.isArray(pages) ? pages : [pages]).flat();
+        const full = prs.length >= 100; // more PRs than one page: absence proves nothing
+        const found = [];
+        for (const j of jobs) {
+          const mine = prs.filter(p => p.head?.ref === j.g.branch);
+          const pr = mine.find(p => p.state === "open")
+            ?? mine.sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0];
+          if (!pr) {
+            if (full) { if (this.canAsk(j)) await this.lookup(j); } else this.miss(j);
+            continue;
+          }
+          // Only the number is known here; checks, mergeability and approvals
+          // come from the number batch, which is one point per ten PRs.
+          this.prNum[j.key] = { number: pr.number, url: pr.html_url, branch: j.g.branch, open: pr.state === "open", at: Date.now() };
+          this.remember(j.g, this.prNum[j.key]);
+          found.push(j);
+        }
+        if (found.length) this.batch(found, group, cx);
+      } catch (e) {
+        this.fail(jobs, e);
+        if (Date.now() < this.holdUntil) return;
+        for (const j of jobs) if (this.canAsk(j)) await this.lookup(j);
       } finally {
         for (const j of jobs) this.markDone(j.key);
         cx.notify();

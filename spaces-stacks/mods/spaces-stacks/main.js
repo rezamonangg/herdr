@@ -46,6 +46,11 @@ const repoName = (common) => {
   const own = base(common);
   return own === ".bare" ? base(common.slice(0, -own.length - 1)) : own.replace(/\.git$/, "");
 };
+// "git@github.com:owner/name.git" or "https://github.com/owner/name" → "owner/name".
+const slugOf = (url) => {
+  const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?[^/:]+[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url ?? "");
+  return m ? `${m[1]}/${m[2]}` : null;
+};
 const samePath = (a, b) => {
   if (!a || !b) return false;
   const p = a.replace(/\/+$/, ""), q = b.replace(/\/+$/, "");
@@ -291,9 +296,11 @@ export default class Spaces extends View {
         exec("git", ["symbolic-ref", "-q", "HEAD"], { cwd, on }),
         exec("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd, on }),
       );
+      let origin = null;
+      try { origin = await exec("git", ["remote", "get-url", "origin"], { cwd, on }); } catch {}
       const name = repoName(repo);
       const [ahead, behind] = counts.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
-      const info = { name, branch: branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : "(detached)", ahead, behind, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git` };
+      const info = { name, branch: branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : "(detached)", ahead, behind, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git`, slug: origin?.code === 0 ? slugOf(origin.stdout.trim()) : null };
       this.git[key] = info;
       if (!on) this.watch(repo, cx);
     } catch {
@@ -341,7 +348,7 @@ export default class Spaces extends View {
       const k = where(w, ps);
       const g = this.git[k];
       if (!g?.branch || g.branch === "(detached)") continue;
-      const entry = map[k] ??= { on: w.machine ?? null, repo: g.repo, branch: g.branch, linked: g.linked, spaces: [] };
+      const entry = map[k] ??= { on: w.machine ?? null, repo: g.repo, branch: g.branch, linked: g.linked, slug: g.slug ?? null, spaces: [] };
       entry.spaces.push({ id: w.id, name: w.name });
     }
     for (const entry of Object.values(map)) entry.spaces.sort((a, b) => a.id.localeCompare(b.id));
