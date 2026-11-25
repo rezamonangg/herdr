@@ -2,7 +2,7 @@
 
 The Spaces sidebar, with stacked PRs shown as a tree and a branch switcher on each main checkout.
 
-The rows are this mod. GitHub facts — the PR mark, the comment badge, the fetch arrow's state — come from [`github-spaces`](../github-spaces/README.md), which must be installed too: it is what asks `gh`, and this mod only draws what it publishes.
+The rows are this mod. GitHub facts — the PR mark, the comment badge, the budget-hold note — come from [`github-spaces`](../github-spaces/README.md), which must be installed too: it is what asks `gh`, and this mod only draws what it publishes. The fetch arrow and ahead/behind counts are this mod's own Git reads.
 
 ![Stacked rows](../github-spaces/preview.png)
 
@@ -62,7 +62,7 @@ GitHub Spaces        main  ↓2
 - Depth comes from the PR's base branch (`baseRefName`), the only reliable stack signal: Git records no parent for a worktree.
 - A PR based on the default branch sits directly under the main checkout.
 - No PR on the branch, or a base branch with no space here → direct child of the main checkout.
-- A repo with no main checkout space keeps its worktrees at the top level, as before.
+- A repo with no main checkout space roots the tree at each worktree whose parent is not among the spaces; a worktree whose base is another worktree here still nests under it.
 - Two PRs retargeted at each other cannot loop: each space appears once.
 - Indentation only. Hover a mark for its PR number and status.
 
@@ -96,7 +96,7 @@ The download-arrow button beside each repo's name runs `git fetch` then `git reb
 - **Branch counts** are Git's, against the last fetched upstream — not the PR's base branch.
 - **A space named exactly after its branch** hides the branch label, so it offers no switcher there.
 
-This is trusted code: it runs `git status`, `git rev-parse`, `git fetch`/`rebase` and `git switch` on your checkouts. Status changes alone never fetch, rebase, switch or delete anything.
+This is trusted code: it runs `git rev-parse`, `git rev-list`, `git fetch`/`rebase` and `git switch` on your checkouts. Status changes alone never fetch, rebase, switch or delete anything.
 
 ## Development
 

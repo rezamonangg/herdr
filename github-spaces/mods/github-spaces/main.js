@@ -127,6 +127,7 @@ export default class GitHubInfo extends View {
     this.mergedDone = new Set(JSON.parse(localStorage.getItem("pr.merged.done") ?? "[]"));
     this.login = null; // gh account, so own comments don't notify
     this.published = null; // the PR map as last written, so an unchanged poll writes nothing
+    this.wroteAt = 0; // last shared write: answers arrive in bursts, renders cost more than the write
     cx.spawn(async (cx) => {
       try {
         const r = await exec("gh", ["api", "user", "--jq", ".login"]);
@@ -139,6 +140,7 @@ export default class GitHubInfo extends View {
     // enough that a branch change is answered in seconds, not minutes.
     cx.timer.every(15000, (cx) => this.sync(cx));
     cx.timer.every(120000, (cx) => this.pollPRs(cx));
+    cx.timer.every(1000, () => this.publish()); // answers suppressed by the write gap land here
     // keys.json: "cmd-shift-r": "github-spaces.refresh"
     cx.spawn(async (cx) => {
       for (;;) if ((await nextCommand()) === "refresh") this.refresh(cx);
@@ -153,7 +155,14 @@ export default class GitHubInfo extends View {
     if (json === this.asked) return;
     this.asked = json;
     const next = {};
-    for (const [key, entry] of Object.entries(map)) if (entry?.branch) next[key] = entry;    for (const key of Object.keys(this.git)) {
+    for (const [key, entry] of Object.entries(map)) if (entry?.branch) next[key] = entry;
+    // A key is a checkout, not a branch: when the branch moved under it (the
+    // sidebar's picker does exactly that), the old answer is not about this one.
+    for (const [key, entry] of Object.entries(next)) {
+      const was = this.git[key];
+      if (was && (was.branch !== entry.branch || was.repo !== entry.repo)) this.moved(key);
+    }
+    for (const key of Object.keys(this.git)) {
       if (next[key]) continue;
       delete this.pr[key]; delete this.prNum[key]; delete this.act[key];
       delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
@@ -165,6 +174,18 @@ export default class GitHubInfo extends View {
     }
     this.publish();
     this.pollPRs(cx, () => true);
+  }
+
+  // Another branch on the same checkout: what was known about the old one is
+  // not about this one, and its first answer stays quiet.
+  moved(key) {
+    delete this.pr[key];
+    delete this.prNum[key];
+    delete this.act[key];
+    delete this.polled[key];
+    delete this.retry[key];
+    delete this.tries[key];
+    this.prSeen.delete(key);
   }
 
   // Look at every published checkout again now. A place polled in the last 30s
@@ -236,7 +257,7 @@ export default class GitHubInfo extends View {
             const node = body.data?.repository?.[`p${c.number}`];
             if (!node || node.headRefName !== j.g.branch || bad.has(`repository.p${c.number}`) || bad.has("repository")) {
               delete this.prNum[j.key];
-              if (Date.now() >= this.holdUntil) await this.lookup(j);
+              if (this.canAsk(j)) await this.lookup(j);
               return;
             }
             await this.deliver(j, fromBatch(node), { on: group.on, cwd: JSON.parse(j.key)[1] });
@@ -246,7 +267,7 @@ export default class GitHubInfo extends View {
         this.fail(jobs, e);
         // A broken batch costs one cycle, not every mark in the repo.
         if (Date.now() < this.holdUntil) return;
-        for (const j of jobs) { delete this.prNum[j.key]; await this.lookup(j); }
+        for (const j of jobs) { delete this.prNum[j.key]; if (this.canAsk(j)) await this.lookup(j); }
       } finally {
         for (const j of jobs) this.markDone(j.key);
         cx.notify();
@@ -254,13 +275,30 @@ export default class GitHubInfo extends View {
     });
   }
 
-  // One place's PR, the long way: gh resolves the branch itself.
+  // One place's PR, the long way: gh resolves the branch itself. A burst of gh
+  // processes reads as abuse and trips GitHub's secondary limit, so these run a
+  // few at a time.
   pollOne(job, cx) {
     this.mark(job.key);
-    cx.spawn(async (cx) => {
-      try { await this.lookup(job); }
-      finally { this.markDone(job.key); cx.notify(); }
-    });
+    (this.queue ??= []).push(job);
+    this.drain(cx);
+  }
+
+  drain(cx) {
+    const queue = this.queue ??= [];
+    while ((this.running ?? 0) < 4 && queue.length) {
+      const job = queue.shift();
+      this.running = (this.running ?? 0) + 1;
+      cx.spawn(async (cx) => {
+        try { await this.lookup(job); }
+        finally {
+          this.running--;
+          this.markDone(job.key);
+          this.drain(cx);
+          cx.notify();
+        }
+      });
+    }
   }
 
   async lookup(job) {
@@ -400,12 +438,24 @@ export default class GitHubInfo extends View {
     for (const s of job.list) this.forget(s);
   }
 
+  // A machine that is out of budget, missing gh, or backing off is not asked again.
+  canAsk(j) {
+    const now = Date.now();
+    return now >= this.holdUntil && now >= (this.ghDead[j.g.on ?? null] ?? 0) && now >= (this.retry[j.key] ?? 0);
+  }
+
   // The PR number outlives a reload: a batch by number is one query where
   // `gh pr view <branch>` is one per branch, each asking for 30 candidates.
   remember(g, pr) {
     const saved = this.saved ??= {};
     const k = `${g.repo}|${g.branch}`;
     if (pr) saved[k] = pr; else delete saved[k];
+    // Closed branches are not worth keeping forever; 30 days is plenty.
+    if (Object.keys(saved).length > 400) {
+      for (const [key, v] of Object.entries(saved)) {
+        if (!v?.open && Date.now() - (v?.at ?? 0) > 30 * 86400000) delete saved[key];
+      }
+    }
     localStorage.setItem("pr.numbers", JSON.stringify(saved));
   }
 
@@ -482,7 +532,7 @@ export default class GitHubInfo extends View {
     for (const [key, g] of Object.entries(this.git)) {
       const k = `${g.repo}|${g.branch}`;
       const pr = this.pr[key];
-      if (pr === undefined) { if (prev[k]) map[k] = prev[k]; continue; } // not asked yet
+      if (pr === undefined) { if (!(k in map) && prev[k]) map[k] = prev[k]; continue; } // not asked yet
       if (!pr) continue; // confirmed: this branch has no PR
       map[k] = {
         number: pr.number, url: pr.url, state: pr.state, base: pr.base,
@@ -495,6 +545,11 @@ export default class GitHubInfo extends View {
     for (const k of Object.keys(map).sort()) sorted[k] = map[k];
     const json = JSON.stringify(sorted);
     if (json === this.published) return;
+    // Every write re-renders every mounted mod; a burst of answers must not
+    // become a burst of renders. The 1s timer publishes what this skips.
+    const now = Date.now();
+    if (now - this.wroteAt < 750) return;
+    this.wroteAt = now;
     this.published = json;
     setShared("github-spaces.prs", sorted);
   }

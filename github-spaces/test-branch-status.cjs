@@ -38,11 +38,6 @@ async function main() {
     if (r.error) throw r.error;
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
-  const git = (...args) => {
-    const r = exec('git', args);
-    assert.equal(r.code, 0, r.stderr);
-    return r.stdout.trim();
-  };
   try {
     const cardsWritten = [];
     const commands = [];
@@ -62,10 +57,9 @@ async function main() {
       spaces: () => polledSpaces, panes: () => [], window: () => ({ active: false }),
     }, { timeout: 1000 });
     const view = new GitHubInfo();
-    view.git = {}; view.checked = {}; view.unsure = new Set(); view.rebasing = {};
+    view.git = {};
     view.pr = {}; view.act = {}; view.prNum = {}; view.retry = {}; view.tries = {};
     view.ghDead = {}; view.authTold = new Set(); view.holdUntil = 0;
-    view.watch = () => {}; // No filesystem watcher in a one-shot test.
     // Conflict, state and CI precedence, as data: the mark is drawn by the
     // sidebar mod, which reads exactly these fields.
     for (const [name, state, mergeable, ci, conflict, expectedCi] of [
@@ -97,7 +91,6 @@ async function main() {
     assert.ok(Array.isArray(pr.comments), 'dock exposes a comment list');
     assert.equal(pr.comments.length, 5, 'dock keeps only five comments');
     assert.deepEqual(Array.from(pr.comments, c => c.body), ['Comment 7', 'Comment 6', 'Comment 5', 'Comment 4', 'Comment 3']);
-    assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
     assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
     const inline = { id: 42, user: { login: 'reviewer', type: 'User' },
       created_at: '2026-11-03T09:00:00Z', body: 'Please fix this line',
@@ -175,6 +168,20 @@ async function main() {
     githubResponse = args => {
       if (args[0] === 'pr') return { code: 0, stdout: JSON.stringify({ number: 1063, state: 'OPEN', author: fixture.author,
         url: 'https://github.com/test/repo/pull/1063', statusCheckRollup: [{ conclusion: 'FAILURE' }], commits: fixture.commits }) };
+      // A known PR is refreshed by number in one GraphQL batch.
+      if (args.includes('graphql') && /pullRequest\(number:/.test(args.find(a => String(a).startsWith('query=')) ?? '')) {
+        const committedDate = fixture.commits?.[0]?.committedDate ?? '';
+        const contexts = { nodes: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'FAILURE' }], pageInfo: { hasNextPage: false } };
+        const node = {
+          number: 1063, url: 'https://github.com/test/repo/pull/1063', state: 'OPEN', mergeable: 'MERGEABLE',
+          reviewDecision: '', updatedAt: `u${fixture.comments.length}-${fixture.reviewComments.length}`, headRefName: 'feature', baseRefName: 'main',
+          author: fixture.author, commits: { nodes: [{ commit: { committedDate, statusCheckRollup: { contexts } } }] },
+        };
+        return { code: 0, stdout: JSON.stringify({ data: {
+          rateLimit: { remaining: 4000, resetAt: new Date(Date.now() + 3600000).toISOString() },
+          repository: { p1063: node },
+        } }) };
+      }
       assert.ok(args.includes('--paginate') && args.includes('--slurp'));
       if (failedEndpoint && args.some(a => a.includes(failedEndpoint))) return { code: 1, stderr: 'temporary API failure' };
       if (args.includes('graphql')) return { code: 0, stdout: JSON.stringify([
@@ -188,12 +195,20 @@ async function main() {
     };
     const tasks = [];
     const cx = { spawn: fn => tasks.push(fn({ notify() {} })) };
-    view.pollPRs(cx); await Promise.all(tasks);
+    // Lookups run a few at a time, so a wave may spawn the next one only after
+    // the previous settles: drain the queue, not just the promises captured.
+    const settle = async () => {
+      for (let i = 0; i < 200; i++) {
+        await Promise.all(tasks.splice(0));
+        if (!view.queue?.length && !view.running) return;
+      }
+    };
+    view.pollPRs(cx); await settle();
     assert.equal(view.pr[key].comments[0].body, inline.body, 'poll reads inline comments across API pages');
     for (const endpoint of ['issues/', '/reviews?', '/comments?', 'graphql']) {
       failedEndpoint = endpoint;
       fixture.reviewThreads = resolved.reviewThreads;
-      tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+      tasks.length = 0; view.pollPRs(cx); await settle();
       assert.ok(view.pr[key].commentCount > 0, 'partial activity failure must not clear attention');
       assert.equal(view.pr[key].comments[0].body, inline.body, 'partial failure retains dock history');
       assert.equal(view.pr[key].ci, 'fail', 'CI still refreshes on activity failure');
@@ -223,11 +238,11 @@ async function main() {
     assert.equal(urls[0], card.comments[0].url, 'comment link opens its exact GitHub URL');
     assert.equal(shown(), 5, 'opening a link does not dismiss the card');
     fixture.commits = [{ authors: [{ login: 'me' }], committedDate: '2099-01-01T00:00:00Z' }];
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(view.pr[key].commentCount, 0, 'a newer commit clears sidebar attention');
     assert.equal(shown(), 5, 'a new commit keeps the cards');
     fixture.commits = [];
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     selected = 'other';
     assert.equal(shown(), 0, 'other worktree shows nothing');
     selected = 'test';
@@ -239,7 +254,7 @@ async function main() {
     assert.equal(shown(), 4, 'repeat poll does not reopen a closed comment');
     fixture.comments.push(comment(9, '2026-11-03T12:00:00Z'));
     const toasted = toasts.length;
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(view.pr[key].commentCount, 9, 'new feedback raises the raw count');
     assert.equal(toasts.length, toasted + 1, 'a new human comment notifies once');
     assert.match(toasts.at(-1).title, /commented/);
@@ -250,10 +265,10 @@ async function main() {
     assert.equal(badgeOf(), 9, 'a dismissed card stays in the published attention list');
     // A close click targets the original comment even if newer activity arrived.
     fixture.comments.push(comment(10, '2026-11-03T13:00:00Z'));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     const staleClose = commentCard(0).items[0].items[1].on_click;
     fixture.comments.push(comment(11, '2026-11-03T14:00:00Z'));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     const before = shown();
     staleClose({}, { stop_propagation() {} });
     assert.equal(bodyOf(0), 'Comment 11', 'newest comment stays in slot 0');
@@ -263,25 +278,26 @@ async function main() {
     closeTop();
     assert.equal(shown(), 0, 'empty slots render nothing after the last close');
     fixture.comments.push(comment(12, '2026-11-03T15:00:00Z'));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(shown(), 1, 'only the new comment appears');
     const saved = storage.get('github-spaces.comments');
     storage.set('github-spaces.comments', { ...saved, test: { ...saved.test, dismissed: true, dismissedIds: undefined } });
     assert.equal(shown(), 0, 'legacy whole-dock dismissal stays respected');
     fixture.comments.push(comment(13, '2026-11-03T16:00:00Z'));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(shown(), 1, 'migration keeps old cards closed when a new comment arrives');
     // The refresh key re-polls every space, but not one asked for within 30 seconds.
     storage.set('spaces.git', { [key]: { ...checkout, branch: 'feature', on: null } });
     view.asking = new Set(); view.polled = {};
     let refreshAsked = 0; const gh = githubResponse;
-    githubResponse = args => { if (args[0] === 'pr') refreshAsked++; return gh(args); };
+    const isPoll = args => args[0] === 'pr' || (args.includes('graphql') && /pullRequest\(number:\d/.test(args.find(a => String(a).startsWith('query=')) ?? ''));
+    githubResponse = args => { if (isPoll(args)) refreshAsked++; return gh(args); };
     const askedAt = commands.length;
-    tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
+    tasks.length = 0; view.refresh(cx); await settle();
     assert.equal(refreshAsked, 1, 'refresh polls the space');
     assert.ok(commands.slice(askedAt).includes('spaces-stacks.refresh'), 'refresh asks the sidebar to re-read git');
     view.asking = new Set();
-    tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
+    tasks.length = 0; view.refresh(cx); await settle();
     assert.equal(refreshAsked, 1, 'a second refresh within 30s does not hit GitHub again');
     githubResponse = gh;
     assert.equal(toasts.at(-1).timeout, 15000, 'comment toasts stay up for 15 seconds');
@@ -289,17 +305,17 @@ async function main() {
     view.prSeen.delete(key);
     fixture.comments.push(comment(14, '2026-11-03T17:00:00Z'));
     const beforeReload = toasts.length;
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(toasts.length, beforeReload + 1, 'a comment missed while the mod was reloaded notifies after the reload');
     // After the git refresh, only spaces without PR data are polled.
     view.asking = new Set(); view.pr = {};
     let asked = 0; const realExec = githubResponse;
-    githubResponse = args => { if (args[0] === 'pr') asked++; return realExec(args); };
-    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await Promise.all(tasks);
+    githubResponse = args => { if (isPoll(args)) asked++; return realExec(args); };
+    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await settle();
     assert.equal(asked, 1, 'the missing PR is fetched right away');
     assert.ok(view.pr[key], 'its mark is back');
     asked = 0; view.asking = new Set();
-    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx, k => !(k in view.pr)); await settle();
     assert.equal(asked, 0, 'spaces that already have PR data are not polled again');
     githubResponse = realExec;
     console.log('PASS independent cards, per-card dismissal, badge decrement, links, scope, and migration');
@@ -345,7 +361,7 @@ async function main() {
       if (args[0] === 'api' && !args.includes('graphql')) activityCalls++;
       return realGh(args);
     };
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(batchCalls, 1, 'one query carries every known PR in the repo');
     assert.equal(view.pr[key].ci, 'fail', 'the batched status is published');
     assert.equal(view.prNum[key].number, 1063);
@@ -354,7 +370,7 @@ async function main() {
 
     // Unchanged updatedAt: no activity lists at all.
     activityCalls = 0; batchCalls = 0;
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(batchCalls, 1);
     assert.equal(activityCalls, 0, 'an unchanged PR skips the three activity lists');
     console.log('PASS unchanged PR skips activity');
@@ -372,7 +388,7 @@ async function main() {
       if (args[0] === 'api') activityAfter++;
       return realGh(args);
     };
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(threadCalls, 1, 'threads are asked about while a badge shows');
     assert.equal(activityAfter, 0, 'and the activity lists still are not');
     assert.equal(view.pr[key].commentCount, attentionBefore - 1, 'resolving the thread clears its comment without a push');
@@ -388,7 +404,7 @@ async function main() {
       }
       return realGh(args);
     };
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(view.pr[key], undefined, 'a late answer is not written onto the new branch');
     assert.equal(view.polled[key], undefined, 'and it does not throttle the next look');
     console.log('PASS a late answer never lands on a moved branch');
@@ -400,7 +416,7 @@ async function main() {
       attentionIds: ['u1'], dismissedIds: [] } });
     failedEndpoint = 'comments';
     githubResponse = args => (args[0] === 'pr' ? { code: 0, stdout: JSON.stringify({ number: 1063, url: url1063, state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [{ conclusion: 'FAILURE' }], author: { login: 'me' }, commits: [], reviewDecision: '' }) } : realGh(args));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(storage.get('github-spaces.comments').test.comments.length, 1, 'a failed first read keeps the saved cards');
     assert.equal(storage.get('github-spaces.comments').test.attentionIds.length, 1, 'and their count');
     assert.equal(view.pr[key].ci, 'fail', 'while the checks still refresh');
@@ -411,7 +427,7 @@ async function main() {
     reset();
     storage.set('github-spaces.comments', { test: { pr: 'fixture#1063', comments: [{}], attentionIds: [], dismissedIds: [] } });
     githubResponse = args => (args[0] === 'pr' ? { code: 1, stderr: 'no pull requests found for branch "feature"' } : realGh(args));
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(view.pr[key], null, 'no PR clears the mark');
     assert.equal(storage.get('github-spaces.comments').test, undefined, 'and hides its dock');
     console.log('PASS a confirmed no-PR hides the dock');
@@ -420,7 +436,7 @@ async function main() {
     reset();
     view.pr[key] = readPR(fixture, view.login);
     githubResponse = () => ({ code: 1, stderr: 'GraphQL: API rate limit already exceeded' });
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     assert.ok(view.holdUntil > Date.now(), 'an exhausted budget stops the next poll');
     assert.ok(view.pr[key]?.number === 1063, 'marks are kept, not cleared');
     githubResponse = realGh;
@@ -431,7 +447,7 @@ async function main() {
     storage.set('github-spaces.comments', {});
     view.git[key] = { ...view.git[key], spaces: [{ id: 'test', name: 'feature' }, { id: 'test2', name: 'feature two' }] };
     githubResponse = realGh;
-    tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
+    tasks.length = 0; view.pollPRs(cx); await settle();
     const cards = storage.get('github-spaces.comments');
     assert.ok(cards.test && cards.test2, 'both spaces on one checkout are written');
     console.log('PASS two spaces on one checkout both get cards');
@@ -445,9 +461,23 @@ async function main() {
     view.publish();
     assert.ok(storage.get('github-spaces.prs')['fixture|feature'], 'a reload does not blank unpublished marks');
     view.pr[key] = null;
+    view.wroteAt = 0; // the 1s write gap would otherwise hold this one
     view.publish();
     assert.equal(storage.get('github-spaces.prs')['fixture|feature'], undefined, 'a confirmed no-PR drops its mark');
     console.log('PASS a reload keeps marks and a no-PR still clears one');
+
+    // A branch swapped under the same checkout (the picker does this) must not
+    // publish the old branch's answer under the new branch.
+    reset();
+    view.pr[key] = readPR(fixture, view.login);
+    view.git[key] = { ...checkout, branch: 'feature', repo: 'fixture' };
+    storage.set('spaces.git', { [key]: { ...checkout, branch: 'switched', repo: 'fixture' } });
+    storage.set('github-spaces.prs', { 'fixture|feature': { number: 1063, state: 'OPEN', attentionIds: [] } });
+    view.asked = null; view.lastPrs = undefined; view.published = null;
+    view.sync(cx);
+    assert.equal(view.pr[key], undefined, 'the old branch\'s answer is dropped');
+    assert.equal(storage.get('github-spaces.prs')['fixture|switched'], undefined, 'and never published under the new branch');
+    console.log('PASS a branch switch clears the old answer');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

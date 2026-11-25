@@ -3,10 +3,11 @@
 // so a stacked PR reads as one tree. Grouped by machine when more than one is
 // known. After a space's name, the repo it is in and its branch (clickable on a
 // main checkout: switch branch or jump to the worktree already on it), plus
-// ahead/behind. PR marks, comment badges and the fetch arrow come from the
-// github-spaces mod through shared state; this mod never asks GitHub itself.
-// Agent state lives in the agents list, not here. Click to switch, right-click
-// for its menu, drag to reorder.
+// ahead/behind. PR marks, comment badges and the budget-hold tooltip come from
+// the github-spaces mod through shared state; the fetch arrow and ahead/behind
+// are this mod's own git reads. This mod never asks GitHub. Agent state lives in
+// the agents list, not here. Click to switch, right-click for its menu, drag to
+// reorder.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
@@ -132,6 +133,10 @@ export default class Spaces extends View {
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
+    // A space added or closed changes what the info mod answers for. Order alone
+    // does not: renders reorder rows, and publishing on that would feed itself.
+    const ids = sp.map(s => s.id).sort().join(",");
+    if (ids !== this.publishedSpaces) { this.publishedSpaces = ids; this.publish(); }
     if (sp.some((s) => !this.shown.has(s.id)) || this.orderingDue(now)) cx.notify();
   }
 
@@ -334,7 +339,7 @@ export default class Spaces extends View {
     for (const w of spaces()) {
       const k = where(w, ps);
       const g = this.git[k];
-      if (!g?.branch) continue;
+      if (!g?.branch || g.branch === "(detached)") continue;
       const entry = map[k] ??= { on: w.machine ?? null, repo: g.repo, branch: g.branch, linked: g.linked, spaces: [] };
       entry.spaces.push({ id: w.id, name: w.name });
     }
@@ -350,7 +355,8 @@ export default class Spaces extends View {
   // What github-spaces last said about this checkout's branch.
   prFor(g) {
     if (!g?.branch) return null;
-    return (shared("github-spaces.prs") ?? {})[`${g.repo}|${g.branch}`] ?? null;
+    const prs = this.prsView ??= shared("github-spaces.prs") ?? {};
+    return prs[`${g.repo}|${g.branch}`] ?? null;
   }
 
   orderingDue(now) {
@@ -364,6 +370,10 @@ export default class Spaces extends View {
   // leaves a worktree a direct child of its main checkout.
   ordered() {
     const sp = spaces(), ps = panes();
+    // Read shared state once per list build: every row's mark and badge comes
+    // from here, and each read copies the whole store.
+    this.prsView = shared("github-spaces.prs") ?? {};
+    this.cardsView = shared("github-spaces.comments") ?? {};
     const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
     for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
     const list = sp.map((w, i) => { const k = where(w, ps); return { w, i, k, g: this.git[k] ?? null }; });
@@ -377,7 +387,7 @@ export default class Spaces extends View {
       const up = upstream ? list.find((x) => x !== r && x.g?.repo === r.g.repo && x.g?.branch === upstream) : null;
       // A PR based on the default branch sits directly under the main checkout.
       if (up) parent.set(r, up);
-      else if (main && main !== r) parent.set(r, main);
+      else if (r.g.linked && main && main !== r) parent.set(r, main);
     }
     const out = [];
     const seen = new Set();
@@ -625,7 +635,7 @@ export default class Spaces extends View {
       merged: ["circle-check", "#a78bfa", "merged"],
       closed: ["minus", t.dim, "closed"],
     }[status] ?? ["minus", t.dim, "status unknown"];
-    const card = sid ? (shared("github-spaces.comments") ?? {})[sid] : null;
+    const card = sid ? (this.cardsView ??= shared("github-spaces.comments") ?? {})[sid] : null;
     const closed = new Set(card ? (card.dismissedIds ?? (card.dismissed ? (card.comments ?? []).map(c => c.id) : [])) : []);
     const count = (pr.attentionIds ?? []).filter(i => !closed.has(i)).length;
     return h_flex().id(`pr-${pr.number}`).gap(4).items_center().flex_none()
@@ -713,6 +723,7 @@ export default class Spaces extends View {
     this.current = null;
     this.at = 0;
     this.error = "";
+    this.switching = false; // a git switch is in flight: a second Enter must not start another
     this.input = InputState.new({ placeholder: "Switch branch" });
     this.input.on("change", (_e, cx) => { this.at = 0; cx.notify(); });
     this.input.on("submit", (_e, cx) => this.pick(this.rows()[this.at]?.name, cx));
@@ -758,12 +769,13 @@ export default class Spaces extends View {
   }
 
   pick(name, cx) {
-    if (!name) return;
+    if (!name || this.switching) return;
     if (name === this.current) return this.close();
     const row = (this.branches ?? []).find(b => b.name === name);
     const there = this.spaceOn(row?.path);
     if (there) { this.close(); return run("space.select", { id: there.id }); }
     if (this.busy()) return notify({ title: "Branch not switched", body: "An agent is working in this space. Let it finish first.", level: "warning" });
+    this.switching = true;
     cx.spawn(async (cx) => {
       try {
         const r = await exec("git", ["switch", "--no-guess", name], { cwd: this.folder, on: this.on });
@@ -772,6 +784,8 @@ export default class Spaces extends View {
         run("spaces-stacks.refresh");
       } catch (e) {
         notify({ title: "Branch not switched", body: String(e?.message ?? e), level: "error", timeout: 8000 });
+      } finally {
+        this.switching = false;
       }
     });
   }

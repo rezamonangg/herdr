@@ -92,7 +92,8 @@ async function main() {
     });
 
     let rows = view.ordered();
-    const depthOf = rows.filter(r => !r.tree), by = (id) => rows.find(r => r.w.id === id);    assert.deepEqual([...rows.map(r => [r.w.id, r.depth])], [['main', 0], ['a', 1], ['b', 2], ['c', 1]],
+    const by = (id) => rows.find(r => r.w.id === id);
+    assert.deepEqual([...rows.map(r => [r.w.id, r.depth])], [['main', 0], ['a', 1], ['b', 2], ['c', 1]],
       'a worktree nests under the worktree its PR targets, depth-first');
     console.log('PASS stack depth follows the PR base branch');
 
@@ -132,12 +133,35 @@ async function main() {
       'without a main checkout the deepest known parent roots the tree');
     console.log('PASS a missing main checkout does not flatten a stack');
 
+    // Two spaces on the repo's own checkout stay siblings: only linked
+    // worktrees belong under it.
+    spaces = [{ id: 'm1', name: 'repo', folder: '/repo' }, { id: 'm2', name: 'repo two', folder: '/repo/src' }];
+    view.shown = new Set(spaces.map(s => s.id));
+    storage.set('github-spaces.prs', {});
+    view.git = {
+      [JSON.stringify([null, '/repo'])]: { name: 'repo', branch: 'main', ahead: 0, behind: 0, repo, linked: false },
+      [JSON.stringify([null, '/repo/src'])]: { name: 'repo', branch: 'main', ahead: 0, behind: 0, repo, linked: false },
+    };
+    rows = view.ordered();
+    assert.deepEqual([...rows.map(r => [r.w.id, r.depth])], [['m1', 0], ['m2', 0]],
+      'a second space on the same checkout is a sibling, not a child');
+    console.log('PASS two spaces on one checkout stay siblings');
+
+    // A detached checkout has no branch to ask GitHub about.
+    view.published = null;
+    view.git = { [JSON.stringify([null, '/repo'])]: { name: 'repo', branch: '(detached)', ahead: 0, behind: 0, repo, linked: false } };
+    view.publish();
+    assert.equal(storage.get('spaces.git')[JSON.stringify([null, '/repo'])], undefined, 'detached checkouts are not published');
+    console.log('PASS detached checkouts are not published');
+
     // --- marks come from the info mod, counts subtract dismissed cards ---
+    view.cardsView = null; view.prsView = null;
     let mark = view.prMark({ number: 5, state: 'OPEN', conflict: false, ci: 'fail', approved: false, attentionIds: ['x', 'y'] }, t, 'a');
     assert.ok(mark.items[0].kind.endsWith('/x.svg'), 'failed checks draw the cross');
     assert.equal(mark.items[0].text_color, '#ef4444');
     assert.equal(mark.items[2].items[1].items[0], '2', 'the bubble counts attention');
     storage.set('github-spaces.comments', { a: { dismissedIds: ['x'] } });
+    view.cardsView = null;
     mark = view.prMark({ number: 5, state: 'OPEN', conflict: false, ci: 'fail', approved: true, attentionIds: ['x', 'y'] }, t, 'a');
     const bubble = mark.items.find(i => typeof i.tooltip === 'string' && i.tooltip.includes('need attention'));
     assert.equal(bubble.items[1].items[0], '1', 'a dismissed card lowers the visible count');

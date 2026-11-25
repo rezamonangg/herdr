@@ -43,7 +43,7 @@ Start from Herdr's shipped `spaces` mod; never edit the original. Keep its selec
 
 - A worktree's parent is the row in the same repo whose branch equals its PR's `base` (`baseRefName`). Git stores no worktree parent.
 - Base equal to the main checkout's branch, no PR, or a base with no space → direct child of the main checkout.
-- No main checkout space → worktrees stay at top level.
+- No main checkout space → worktrees whose parent is not among the spaces root the tree; one whose base is another worktree here still nests under it.
 - Depth-first emission; a visited set breaks retargeted cycles.
 - Rows carry `depth`; indent is `22 * depth`; nested rows are 28px, main rows 30px.
 - Keep the existing reordering: move spaces to match the emitted order, once per second at most.
@@ -77,7 +77,7 @@ Drop: every row, group, menu, machine, git-status and fetch control. Read checko
 
 Keep the guard: an answer for a branch the checkout already left is dropped.
 
-Publish by merging, never wholesale: an unanswered checkout keeps the last published answer, a confirmed no-PR drops it, and a checkout that left the sidebar drops too. Otherwise every reload blanks every mark until it is re-resolved. Cache the resolved PR number by `repo|branch` in `localStorage` (`pr.numbers`) so a reload batches by number — one query per repo — instead of `gh pr view` per branch. Restore a published budget hold on start, and toast when a manual refresh arrives while held.
+Publish by merging, never wholesale: an unanswered checkout keeps the last published answer, a confirmed no-PR drops it, and a checkout that left the sidebar drops too. Otherwise every reload blanks every mark until it is re-resolved. Every write re-renders every mounted mod, so writes are also gated to one per second: a burst of PR answers must not become a burst of renders. Cache the resolved PR number by `repo|branch` in `localStorage` (`pr.numbers`) so a reload batches by number — one query per repo — instead of `gh pr view` per branch. Restore a published budget hold on start, and toast when a manual refresh arrives while held.
 
 ### `updatedAt` gate
 

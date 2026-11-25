@@ -128,4 +128,4 @@ node spaces-stacks/test-stacks.cjs
 git diff --check
 ```
 
-The regression check verifies conflict precedence, five-comment ordering, bot filtering, attention counts, resolution, author commits, links, pagination, partial API failures, batching, moved branches, budget pauses, and explicit dock dismissal. Disposable Git repositories cover the sidebar's branch arrows. It does not touch your working branches. Also run Herdr's check on both installed mods and inspect the live sidebar; headless checks do not cover every later render state.
+The regression check verifies conflict precedence, five-comment ordering, bot filtering, attention counts, resolution, author commits, links, pagination, partial API failures, batching, moved branches, reload merges, budget pauses, and explicit dock dismissal. It does not touch your working branches. The sidebar's own check (`node spaces-stacks/test-stacks.cjs`) covers stack depth, marks from published data, and the branch arrows with disposable Git repositories. Also run Herdr's check on both installed mods and inspect the live sidebar; headless checks do not cover every later render state.
