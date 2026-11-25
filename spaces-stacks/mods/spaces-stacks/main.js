@@ -509,7 +509,8 @@ export default class Spaces extends View {
       const text = a.toLowerCase();
       return text === fullName || text === label;
     };
-    const branch = depth > 0 || same(raw) ? "" : raw;
+    // A worktree row is usually named after its branch; show it only when not.
+    const branch = same(raw) ? "" : raw;
     const repo = depth > 0 || same(g.name) ? "" : g.name;
     return h_flex()
       .flex_auto()

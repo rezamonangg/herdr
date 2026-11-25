@@ -81,7 +81,7 @@ A main checkout's row shows its branch name, including `main`/`master`, and it i
 
 Errors show git's own words. Nothing is forced, stashed or discarded. Local branches only: this mod does not create tracking branches from remotes.
 
-The branch of a nested row is not shown separately — the worktree is named after its branch.
+A nested row shows its branch too when its name is not that branch (`daily proxy usage reporter` on `chore/daily-report`). A worktree named exactly after its branch repeats nothing. Only main rows offer the switcher.
 
 ## Other controls
 

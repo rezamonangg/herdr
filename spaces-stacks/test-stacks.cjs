@@ -148,6 +148,13 @@ async function main() {
     assert.ok(mergedMark.items[0].kind.endsWith('/circle-check.svg'), 'merged beats conflict');
     console.log('PASS marks render from published PR data');
 
+    // A worktree named by task rather than by branch still shows its branch.
+    const tail = view.gitTail({ name: 'repo', branch: 'chore/daily-report', ahead: 1, behind: 0, linked: true }, 1, 'daily proxy usage reporter', t, { id: 'x' });
+    assert.ok(tail.items.some(i => i.items?.[0] === 'chore/daily-report'), 'a worktree named differently shows its branch');
+    const quiet = view.gitTail({ name: 'repo', branch: 'debug-bustem', ahead: 0, behind: 0, linked: true }, 1, 'debug-bustem', t, { id: 'y' });
+    assert.ok(!quiet.items.some(i => i.items?.[0] === 'debug-bustem'), 'a worktree named after its branch repeats nothing');
+    console.log('PASS worktree rows show a branch only when the name differs');
+
     // --- git state and the fetch arrow (the viewer owns git; no gh here) ---
     view.watch = () => {};
     const key = JSON.stringify([null, cwd]);
