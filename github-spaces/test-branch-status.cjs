@@ -435,6 +435,19 @@ async function main() {
     const cards = storage.get('github-spaces.comments');
     assert.ok(cards.test && cards.test2, 'both spaces on one checkout are written');
     console.log('PASS two spaces on one checkout both get cards');
+
+    // A reload keeps the last marks until fresh answers arrive; a confirmed
+    // no-PR still removes one.
+    reset();
+    storage.set('github-spaces.prs', { 'fixture|feature': { number: 1063, state: 'OPEN', attentionIds: [] } });
+    view.pr = {};
+    view.lastPrs = undefined; view.published = null;
+    view.publish();
+    assert.ok(storage.get('github-spaces.prs')['fixture|feature'], 'a reload does not blank unpublished marks');
+    view.pr[key] = null;
+    view.publish();
+    assert.equal(storage.get('github-spaces.prs')['fixture|feature'], undefined, 'a confirmed no-PR drops its mark');
+    console.log('PASS a reload keeps marks and a no-PR still clears one');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

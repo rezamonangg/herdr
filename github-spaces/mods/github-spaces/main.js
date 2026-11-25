@@ -119,8 +119,11 @@ export default class GitHubInfo extends View {
     this.tries = {}; // where() -> consecutive failures, for the backoff
     this.ghDead = {}; // machine -> gh is missing or not signed in there until this ms
     this.authTold = new Set(); // machines already told about it
-    this.holdUntil = 0; // polling stops until then: the budget is spent
-    this.holdTold = 0; // the hold as last published, so an unchanged one writes nothing
+    this.holdUntil = Number(shared("github-spaces.hold")) || 0; // a hold survives a reload
+    this.holdTold = this.holdUntil; // the hold as last published, so an unchanged one writes nothing
+    // PR numbers by repo|branch: a reload batches by number instead of asking
+    // gh to resolve every branch again (the expensive path, and the budget).
+    try { this.saved = JSON.parse(localStorage.getItem("pr.numbers") ?? "{}") ?? {}; } catch { this.saved = {}; }
     this.mergedDone = new Set(JSON.parse(localStorage.getItem("pr.merged.done") ?? "[]"));
     this.login = null; // gh account, so own comments don't notify
     this.published = null; // the PR map as last written, so an unchanged poll writes nothing
@@ -156,6 +159,10 @@ export default class GitHubInfo extends View {
       delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
     }
     this.git = next;
+    for (const [key, g] of Object.entries(next)) {
+      const known = this.saved?.[`${g.repo}|${g.branch}`];
+      if (known && !this.prNum[key]) this.prNum[key] = known;
+    }
     this.publish();
     this.pollPRs(cx, () => true);
   }
@@ -164,6 +171,10 @@ export default class GitHubInfo extends View {
   // is skipped, so mashing the key is cheap on the GitHub API.
   refresh(cx) {
     run("spaces-stacks.refresh");
+    if (Date.now() < this.holdUntil) {
+      notify({ title: "GitHub paused", body: `Rate limit: PR marks resume ${new Date(this.holdUntil).toISOString().slice(11, 16)} UTC.`, level: "warning", timeout: 8000 });
+      return;
+    }
     this.sync(cx);
     this.pollPRs(cx, (k) => Date.now() - (this.polled[k] ?? 0) > 30000);
   }
@@ -291,6 +302,7 @@ export default class GitHubInfo extends View {
     this.prNum[key] = { number: pr.number, url: pr.url, branch: g.branch, open: pr.state === "OPEN",
       at: pr.state === "OPEN" || job.fresh || !prev ? Date.now() : prev.at };
     this.ok(key);
+    this.remember(g, this.prNum[key]);
     this.publish();
     for (const s of list) this.speak(s, key, g);
   }
@@ -383,8 +395,18 @@ export default class GitHubInfo extends View {
     delete this.act[job.key];
     this.pr[job.key] = null;
     this.ok(job.key);
+    this.remember(job.g, null);
     this.publish();
     for (const s of job.list) this.forget(s);
+  }
+
+  // The PR number outlives a reload: a batch by number is one query where
+  // `gh pr view <branch>` is one per branch, each asking for 30 candidates.
+  remember(g, pr) {
+    const saved = this.saved ??= {};
+    const k = `${g.repo}|${g.branch}`;
+    if (pr) saved[k] = pr; else delete saved[k];
+    localStorage.setItem("pr.numbers", JSON.stringify(saved));
   }
 
   forget(s) {
@@ -450,23 +472,31 @@ export default class GitHubInfo extends View {
   }
 
   // What the sidebar draws: one entry per checkout, keyed the way it keys its
-  // own git state. Written only when it changed, since a write re-renders every
-  // mod, this one included.
+  // own git state. Unanswered checkouts keep the last answer, so a reload never
+  // blanks the marks; a confirmed no-PR drops its entry. Written only when it
+  // changed, since a write re-renders every mod, this one included.
   publish() {
+    if (!Object.keys(this.git).length) return; // nothing known yet: keep what is published
+    const prev = this.lastPrs ??= (shared("github-spaces.prs") ?? {});
     const map = {};
     for (const [key, g] of Object.entries(this.git)) {
+      const k = `${g.repo}|${g.branch}`;
       const pr = this.pr[key];
-      if (!pr) continue;
-      map[`${g.repo}|${g.branch}`] = {
+      if (pr === undefined) { if (prev[k]) map[k] = prev[k]; continue; } // not asked yet
+      if (!pr) continue; // confirmed: this branch has no PR
+      map[k] = {
         number: pr.number, url: pr.url, state: pr.state, base: pr.base,
         conflict: pr.conflict, ci: pr.ci, approved: pr.approved,
         attentionIds: pr.attentionIds,
       };
     }
-    const json = JSON.stringify(map);
+    this.lastPrs = map;
+    const sorted = {};
+    for (const k of Object.keys(map).sort()) sorted[k] = map[k];
+    const json = JSON.stringify(sorted);
     if (json === this.published) return;
     this.published = json;
-    setShared("github-spaces.prs", map);
+    setShared("github-spaces.prs", sorted);
   }
 
   // Dock history survives resolution and commits; only new activity reopens a dismissed card.

@@ -77,6 +77,8 @@ Drop: every row, group, menu, machine, git-status and fetch control. Read checko
 
 Keep the guard: an answer for a branch the checkout already left is dropped.
 
+Publish by merging, never wholesale: an unanswered checkout keeps the last published answer, a confirmed no-PR drops it, and a checkout that left the sidebar drops too. Otherwise every reload blanks every mark until it is re-resolved. Cache the resolved PR number by `repo|branch` in `localStorage` (`pr.numbers`) so a reload batches by number — one query per repo — instead of `gh pr view` per branch. Restore a published budget hold on start, and toast when a manual refresh arrives while held.
+
 ### `updatedAt` gate
 
 Activity lists are fetched only when `updatedAt` moved or no complete read exists. Thread resolution is re-read while attention is non-empty, because resolving does not move `updatedAt`. A partial endpoint answer keeps the previous snapshot; it is never read as resolved.
