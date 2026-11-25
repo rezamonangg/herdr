@@ -1,125 +1,97 @@
-# GitHub Spaces
+# GitHub Spaces: build brief
 
-Build a replacement for Herdr's Spaces sidebar that adds GitHub PR marks, comment badges, merge notifications, and a fetch/rebase button. Preserve the shipped sidebar's machine groups, worktree nesting, navigation, menus, and drag-to-reorder behavior.
+Two mods, split by job. A sidebar is exactly one mod, so they meet through shared state:
 
-![GitHub Spaces](preview.png)
+- **`spaces-stacks`** draws the spaces: rows, machine groups, the worktree tree, stacked PRs, the branch switcher, the fetch arrow.
+- **`github-spaces`** answers GitHub: the PR on each checkout, checks, conflicts, review state, human comments. It draws nothing except the comment cards and toasts.
 
-This is a build brief, not an installation guide. See [README.md](README.md) for installation, controls, and limitations. The files beside this recipe are one implementation.
+![GitHub Spaces](../github-spaces/preview.png)
 
-## What you see
+This is a build brief, not an installation guide. See [README](../github-spaces/README.md) and [Spaces Stacks](../spaces-stacks/README.md) for installation, controls, and limits.
 
-- A theme-aware Spaces panel with its existing header, new-space control, machine groups, colored avatars, and scrollable rows.
-- Main rows are 30px high; nested worktree rows are 28px. The original sidebar's compact rail remains available.
-- PR marks replace the branch icon on nested rows and appear after the name on main rows. Tooltips include the PR number.
-- A download-arrow button sits beside each repository space's name. Raw ahead/behind counts remain at the right of the row.
+## The contract
 
-| PR state | Mark | Color |
-| --- | --- | --- |
-| Open PR with confirmed merge conflicts | Crossing branches with exclamation mark | Orange `#f97316` |
-| Failed checks | Cross | Red `#ef4444` |
-| Running checks | Native spinning ring | Yellow `#eab308` |
-| Passing classification | Circle-check | Green `#22c55e` |
-| Merged | Circle-check | Purple `#a78bfa` |
-| Closed | Minus | Theme dim |
-| No known PR | Original sidebar icon | Unchanged |
+| Shared key | Writer | Reader | Shape |
+| --- | --- | --- | --- |
+| `spaces.git` | sidebar | info | `where()` → `{ on, repo, branch, linked, spaces: [{ id, name }] }` |
+| `github-spaces.prs` | info | sidebar | `` `${repo}|${branch}` `` → `{ number, url, state, base, conflict, ci, approved, attentionIds }` |
+| `github-spaces.comments` | info | sidebar, cards | space id → saved cards, `attentionIds`, `dismissedIds` |
+| `github-spaces.hold` | info | sidebar | ms until polling resumes |
 
-Pending human feedback adds a 12px speech bubble and bold count in the theme accent color. The count covers all pending comments, not only the five cards. PR marks are about 13px; the download arrow is 14px. Strictly behind branches get a red arrow and a 16px-high red pill with a bold white count. Otherwise the arrow uses theme blue.
+`setShared` re-renders every mod, so every writer compares its JSON first. `where()` is `JSON.stringify([machine, folder])`, the same key both mods already used for git state.
 
-## How it behaves
+Mods cannot call each other. To ask the other copy to look again: `run("<mod>.<command>")` delivers to that mod's `nextCommand()`.
 
-### Branch and PR lookup
+## Install shape
 
-Determine each space's checkout from its first terminal's live folder, falling back to its saved folder. Group linked worktrees by Git's common directory, scoped to the machine.
+- The sidebar block uses `spaces-stacks`.
+- `github-spaces` is mounted as a `1px` block (`{"id":"github-info","type":"block","size":{"px":1}}`), like `panel-keys`: mounted means its timers run.
+- Five floating comment-card blocks use `github-spaces` with `props.role: "comment"`.
+- No shipped layout or key binding changes. The refresh key stays `github-spaces.refresh`; the info mod forwards to `spaces-stacks.refresh`.
 
-Read branch and ahead/behind counts with `git status --porcelain=v2 --branch`. Use Git-directory watches and the existing sidebar refresh logic to update local state.
+## Sidebar: `spaces-stacks`
 
-Every two minutes, refresh every known PR. Keep the PR number per checkout and ask for it by number:
+Start from Herdr's shipped `spaces` mod; never edit the original. Keep its selection, drag, menus, machine groups, reconnect, rail, scroll-to-active, and ordering sync.
 
-```
-<alias>: pullRequest(number: <n>) { number url state mergeable reviewDecision updatedAt
-  headRefName author { login }
-  commits(last:1) { nodes { commit { committedDate statusCheckRollup {
-    contexts(first:100) { nodes { __typename ... on CheckRun { status conclusion }
-                                   ... on StatusContext { state } } pageInfo { hasNextPage } } } } } }
-```
+### Git
 
-Send up to ten aliases in one `gh api graphql` call per repository, grouped by machine and repository. Verify `headRefName` still matches the checkout before publishing; on a miss, a changed head, a failed alias, or a malformed answer, fall back to `gh pr view <branch> --json number,url,state,mergeable,statusCheckRollup,author,commits,reviewDecision,updatedAt` in that checkout. Re-resolve merged and closed PRs every 30 minutes so a reused branch can acquire a new one.
+`git rev-parse --show-toplevel` and `--git-common-dir` name the repo; `symbolic-ref` names the branch; `rev-list --left-right --count HEAD...@{upstream}` gives ahead/behind. Counts are against the last fetched upstream, not the PR base. Do not auto-fetch.
 
-Run commands on the space's machine. Deduplicate in-flight lookups by machine and folder, and write the answer to every space still on that checkout. Poll even when the window is not focused. Failures back off one place (2 s doubling to 30 min); only `gh` missing or unauthenticated pauses a machine for 30 minutes. Read the shared GraphQL budget out of each answer (`rateLimit { remaining resetAt }`) and stop polling until it resets rather than failing every cycle. Known no-PR responses clear the PR mark and its dock; other command failures preserve both. A status that arrives after the checkout moved must be dropped, not published.
+### Stack forest
 
-Fetch the three REST activity lists (issue comments, reviews, review comments) only when the PR's `updatedAt` changed since the last complete read, or when no complete read exists yet. A partial answer keeps the previous snapshot; it never reads as resolved.
+`ordered()` builds the rows:
 
-For checks, failure takes priority over running, then passing. Classify a check run by `conclusion`, falling back to `status`, and a legacy status context by its `state`. An empty check list falls through to passing; do not describe this as proof that a PR is ready to merge.
+- A worktree's parent is the row in the same repo whose branch equals its PR's `base` (`baseRefName`). Git stores no worktree parent.
+- Base equal to the main checkout's branch, no PR, or a base with no space → direct child of the main checkout.
+- No main checkout space → worktrees stay at top level.
+- Depth-first emission; a visited set breaks retargeted cycles.
+- Rows carry `depth`; indent is `22 * depth`; nested rows are 28px, main rows 30px.
+- Keep the existing reordering: move spaces to match the emitted order, once per second at most.
 
-For open PRs, `mergeable: "CONFLICTING"` overrides the CI mark with the orange conflict icon and a merge-conflict tooltip. Do not treat `UNKNOWN` as a conflict. Merged and closed marks take priority. Restore the CI mark when GitHub no longer reports conflicts.
+### Marks and arrow
 
-### Notifications
+Draw the PR mark from `github-spaces.prs`: conflict beats CI; merged and closed beat both; failed beats running beats passing. The attention bubble is `attentionIds` minus `dismissedIds` from the saved cards. Plain spaces show open PRs only; worktree rows show merged and closed too.
 
-Comment notifications use the persistent worktree-scoped comment cards described in [README.md](README.md), plus one Herdr toast per newly seen pending human comment (click selects the space; also for comments that arrived while Herdr was closed; never when no card was saved yet). The sidebar saves the latest five human comments per space in shared `github-spaces.comments` state, with `attentionIds` (pending comments) and `dismissedIds` (cards the person closed). Five extra copies of the same mod, with `props: { role: "comment", slot: 0..4 }`, each render one card for the selected space and never initialize polling. Attach them as floating blocks with `edge: "bottom"`, `align: "end"` to the work-area node — attaching it to the terminal block covers the terminal's status line.
+The fetch arrow is a row control: red with a count when strictly behind, blue otherwise, spinner while this mod's fetch/rebase runs. Run `git fetch`, then plain `git rebase`; never push, resolve or abort.
 
-`dock.js` exports `commentCard(slot)`: a 360px-wide card (author, UTC time, 300-character preview, bottom-right GitHub link, × close). A slot past the last visible comment returns an empty div, so its block collapses. Open links through the click callback's `cx.open_url`; never through a shell.
+### Branch switcher
 
-Closing a card records its comment id; the sidebar count drops with it. A close callback dismisses by comment id, so it stays safe after newer activity arrived. Resolution and new commits never close cards; only × does. Switching spaces swaps cards without deleting state. The initial lookup can populate history without a toast.
+Main rows show their branch (`main`/`master` included) and clicking it opens `props.role === "branches"` as a popup of this mod. List `git for-each-ref --format=%(refname:lstrip=2)%09%(worktreepath) refs/heads`:
 
-The first successful lookup of a place is quiet. Later, a newly observed merge triggers a toast and, for linked worktrees only, opens Herdr's existing `worktree` removal dialog. Record handled PRs in `localStorage` to avoid repeated prompts. Never delete automatically.
+- current branch → close;
+- branch with a worktree path that belongs to a space → `space.select` that space;
+- otherwise `git switch --no-guess <branch>`; refuse while a pane in the space is `status === "working"`;
+- failures show git's words; close nothing but the popup on success, then `run("spaces-stacks.refresh")`.
 
-Using the host and repository from the PR URL, fetch paginated REST issue comments, reviews, and inline comments. REST actor metadata identifies bot accounts and supplies direct comment URLs. Fetch paginated GraphQL `reviewThreads` with `isResolved` and the first comment's `databaseId`; match inline roots and replies to their thread.
+The popup is a separate copy: give it its own `InputState`, focus handle, and root `track_focus`; Esc closes popups.
 
-Combine discussion comments, nonempty submitted review summaries, and inline replies. Exclude pending reviews, your own account, bot accounts, and usernames containing `bot` case-insensitively. Sort by creation/submission time, using comment identity to break ties. Do not collapse comments sharing a timestamp. Keep only the latest five for the dock, but calculate the sidebar count from the full human-comment list.
+### Publishing
 
-For open PRs, attention is the list of unresolved human comment ids. Attention also excludes comments older than the PR's latest commit (`commits[].committedDate` from `gh pr view`) — a push clears the badge; thread resolution, closing cards, or the PR closing/merging also do. The sidebar badge subtracts closed card ids from that list on every render.
+`publish()` writes `spaces.git` on change from the git refresh — never from render, since a write re-renders every mod and render already reorders spaces. Keys and the spaces inside each entry are sorted, so a reorder alone writes nothing. Keep every space on a shared checkout: the info mod keys its answer per checkout but keeps one card per space.
 
-If any activity endpoint fails, keep the previous comments and attention count while still refreshing CI and merge status. Never interpret a partial response as resolved feedback.
+## Info: `github-spaces`
 
-New human activity updates the persistent card. Resolving feedback or pushing a commit clears the sidebar without changing dock history. Edits are not tracked.
+Keep: batched `pullRequest` query (add `baseRefName`), the `gh pr view` fallback (same field), comment activity pagination, review threads, bot/own/author filtering, attention rules, backoff, budget tally, merge prompts, dock state, notifications.
 
-Keep agent status in the existing agents list; do not replace it with PR status.
+Drop: every row, group, menu, machine, git-status and fetch control. Read checkouts from `spaces.git` on a short timer (15 s) and poll GitHub when the set changes; re-poll every two minutes. Publish `github-spaces.prs` on each answer and on a confirmed no-PR, so old marks disappear. Write nothing when the JSON is unchanged.
 
-### Fetch/rebase
+Keep the guard: an answer for a branch the checkout already left is dropped.
 
-- Red means `behind > 0` and `ahead === 0`. Show the behind count in the badge.
-- Ahead and behind together means diverged. Keep the arrow blue and explain in the tooltip: inspect history before rebasing or pushing.
-- Clicking runs `git fetch`, then plain `git rebase` in that checkout. Use its configured upstream, not the PR's base branch.
-- While the mod's operation runs, animate the arrow natively. Show errors in a toast and refresh all checkout counts for that repository afterward.
-- Never push, auto-resolve conflicts, or abort an operation. A conflict can leave rebase paused. External rebases are not detected or animated by the current implementation.
+### `updatedAt` gate
 
-Counts reflect the last fetch. Do not auto-fetch just to refresh the display. Blue is a default, not an assertion that the branch is synchronized.
+Activity lists are fetched only when `updatedAt` moved or no complete read exists. Thread resolution is re-read while attention is non-empty, because resolving does not move `updatedAt`. A partial endpoint answer keeps the previous snapshot; it is never read as resolved.
 
-## Built from
+### Comment counts
 
-One mod folder, `mods/github-spaces/`, containing `main.js`, `dock.js`, `mod.json`, `approved.svg`, `arrow-down.svg`, `comment.svg`, and `conflict.svg`. The manifest uses `place: "none"`; the person's personal layout references the mod in its existing spaces block and comment dock. No layout files or key bindings are shipped.
-
-Start from a clone of Herdr's shipped `spaces` mod. Never edit the shipped original. Reuse its grouping, watchers, menus, and row interactions.
-
-The main paths through `main.js` are:
-
-| Responsibility | Entry points |
-| --- | --- |
-| Checkout state and grouping | `check`, `refreshGit`, `ordered`, `grouped` |
-| PR polling and classification | `pollPRs`, `readPR` |
-| Dock history and merge notifications | `speak`, `commentCard` in `dock.js` |
-| Row controls | `prMark`, `fetchButton`, `fetchRebase` |
-
-Use `exec` with `{ cwd, on }` for Git and GitHub CLI commands. Use `notify` for toasts and `openOverlay` for Herdr's removal dialog. Reuse shipped `workspace-chrome` icons where possible; keep the arrow, comment, and conflict assets in this mod.
-
-Use `cx.spawn` for async work, `cx.timer` for data polling, and native `.spin(900)` for animation. Persist handled merges in `localStorage`; dock history and dismissal use shared state. Read the installed Herdr guide and generated types before building against its API.
-
-## Watch out
-
-- `window()` is null during headless checks. Skip PR polling there, but do not gate real polling on `window().active`.
-- Never pass `null` to `.child()`. A no-PR row must retain its original icon without crashing the sidebar.
-- Stop mouse propagation on the fetch button so it does not trigger row selection or dragging.
-- Do not retain a callback's `cx`; each callback receives its own.
-- Ahead/behind counts cannot distinguish a completed rebase from independent remote commits. Do not recommend a push based only on those counts.
-- Remote `gh` accounts may differ from the local account used for own-comment filtering. Preserve this limitation in user documentation.
+Attention = unresolved human comments newer than the PR's latest commit, on an open PR. Publish the ids; the sidebar subtracts cards the person closed. Cards keep the latest five. A first comment on a comment-free PR notifies; a comment that arrived while Herdr was closed notifies once.
 
 ## Done when
 
-1. `node github-spaces/test-branch-status.cjs` passes from the repository root. It covers synchronized, behind-only, ahead-only, independently diverged, and rebased-but-unpushed histories.
-2. `herdr-app check <installed-mod-directory>` passes, status reports no errors, and a live screenshot confirms row layout and colors.
-3. PR and no-PR rows both render; worktree nesting, selection, menus, and reordering still work.
-4. Clicking fetch/rebase animates, reports failures, and refreshes counts. A merge prompts once without automatic deletion. Human feedback produces a numbered sidebar icon and a latest-five set of independent cards with exact comment links. Resolution and card closes lower the number; a newer commit clears the badge; only × closes a card.
+1. `node github-spaces/test-branch-status.cjs` and `node spaces-stacks/test-stacks.cjs` pass.
+2. `herdr-app check` passes on both installed mods, status reports no errors.
+3. A live sidebar shows PR marks and comment badges from the info mod; rows still select, drag, reorder, and group by machine.
+4. A two-deep stack nests from PR bases; a retargeted PR moves one poll later; a branch with no PR stays flat.
+5. The branch popup switches a free branch, jumps to a worktree on a taken branch, refuses while an agent works, and a failed switch toasts git's words.
+6. Merged worktrees still prompt once, comment cards still close and count, and notifications still select the space.
 
-Headless checks and branch-state tests do not prove live notification behavior. Exercise those transitions separately before claiming full verification.
-
-A `refresh` mod command (`keys.json`: `"cmd-shift-r": "github-spaces.refresh"`, delivered through `nextCommand()`) re-checks git and polls every space's PR, skipping spaces polled in the last 30 seconds.
+Headless checks do not prove live notification or popup behaviour. Exercise those transitions separately.

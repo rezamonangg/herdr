@@ -45,42 +45,42 @@ async function main() {
   };
   try {
     const cardsWritten = [];
+    const commands = [];
     const toasts = [];
     const storage = new Map();
     const polledSpaces = [];
     const source = fs.readFileSync(path.join(__dirname, 'mods/github-spaces/main.js'), 'utf8')
       .replace(/^import .*;$/gm, '').replace(/export default class /, 'class ').replace(/^export /gm, '');
-    const { Spaces, readPR } = vm.runInNewContext(`${source}\n({ Spaces, readPR })`, {
+    const { GitHubInfo, readPR } = vm.runInNewContext(`${source}\n({ GitHubInfo, readPR })`, {
       View: class {}, div: () => element('div'), h_flex: () => element('row'),
       svg: (p) => element(p), exec,
+      run: name => { commands.push(name); return null; },
       notify: n => toasts.push(n),
       shared: k => storage.get(k),
       setShared: (k, v) => { storage.set(k, v); cardsWritten.push(v); },
       localStorage: { setItem: (k, v) => storage.set(k, v) },
       spaces: () => polledSpaces, panes: () => [], window: () => ({ active: false }),
     }, { timeout: 1000 });
-    const view = new Spaces();
+    const view = new GitHubInfo();
     view.git = {}; view.checked = {}; view.unsure = new Set(); view.rebasing = {};
     view.pr = {}; view.act = {}; view.prNum = {}; view.retry = {}; view.tries = {};
     view.ghDead = {}; view.authTold = new Set(); view.holdUntil = 0;
     view.watch = () => {}; // No filesystem watcher in a one-shot test.
-    for (const [name, state, mergeable, ci, icon, color] of [
-      ['conflict beats passing CI', 'OPEN', 'CONFLICTING', 'SUCCESS', 'conflict', '#f97316'],
-      ['conflict beats running CI', 'OPEN', 'CONFLICTING', 'QUEUED', 'conflict', '#f97316'],
-      ['conflict beats failed CI', 'OPEN', 'CONFLICTING', 'FAILURE', 'conflict', '#f97316'],
-      ['merged beats conflict', 'MERGED', 'CONFLICTING', 'SUCCESS', 'circle-check', '#a78bfa'],
-      ['closed beats conflict', 'CLOSED', 'CONFLICTING', 'SUCCESS', 'minus', 'dim'],
-      ['unknown is not conflict', 'OPEN', 'UNKNOWN', 'SUCCESS', 'circle-check', '#22c55e'],
-      ['resolved conflict restores CI', 'OPEN', 'MERGEABLE', 'FAILURE', 'x', '#ef4444'],
+    // Conflict, state and CI precedence, as data: the mark is drawn by the
+    // sidebar mod, which reads exactly these fields.
+    for (const [name, state, mergeable, ci, conflict, expectedCi] of [
+      ['conflict beats passing CI', 'OPEN', 'CONFLICTING', 'SUCCESS', true, 'pass'],
+      ['conflict beats running CI', 'OPEN', 'CONFLICTING', 'QUEUED', true, 'run'],
+      ['conflict beats failed CI', 'OPEN', 'CONFLICTING', 'FAILURE', true, 'fail'],
+      ['merged beats conflict', 'MERGED', 'CONFLICTING', 'SUCCESS', true, 'pass'],
+      ['closed beats conflict', 'CLOSED', 'CONFLICTING', 'SUCCESS', true, 'pass'],
+      ['unknown is not conflict', 'OPEN', 'UNKNOWN', 'SUCCESS', false, 'pass'],
+      ['resolved conflict restores CI', 'OPEN', 'MERGEABLE', 'FAILURE', false, 'fail'],
     ]) {
       const pr = readPR({ number: 1, state, mergeable, statusCheckRollup: [{ conclusion: ci }] });
-      const mark = view.prMark(pr, { repo: 'test' }, { dim: 'dim' });
-      assert.ok(mark.items[0].kind.endsWith(`/${icon}.svg`), name);
-      assert.equal(mark.items[0].text_color, color, name);
-      if (icon === 'conflict') {
-        assert.match(mark.tooltip, /merge conflicts/);
-        assert.equal(Object.hasOwn(mark.items[0], 'spin'), false, 'conflict icon must not spin');
-      }
+      assert.equal(pr.conflict, conflict, name);
+      assert.equal(pr.state, state, name);
+      assert.equal(pr.ci, expectedCi, `${name}: CI`);
       console.log(`PASS ${name}`);
     }
     view.prSeen = new Set(); view.pr = {}; view.mergedDone = new Set();
@@ -98,8 +98,7 @@ async function main() {
     assert.equal(pr.comments.length, 5, 'dock keeps only five comments');
     assert.deepEqual(Array.from(pr.comments, c => c.body), ['Comment 7', 'Comment 6', 'Comment 5', 'Comment 4', 'Comment 3']);
     assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
-    const badge = view.prMark(pr, {}, {}).items[2];
-    assert.equal(badge.items[1].items[0], '7', 'sidebar renders a number beside the comment icon');
+    assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
     const inline = { id: 42, user: { login: 'reviewer', type: 'User' },
       created_at: '2026-11-03T09:00:00Z', body: 'Please fix this line',
       html_url: 'https://github.com/test/repo/pull/1063#discussion_r42' };
@@ -113,8 +112,8 @@ async function main() {
       ['bot in username', { reviewComments: [{ ...inline, user: { login: 'reviewBot', type: 'User' } }] }, false],
     ]) {
       pr = readPR({ ...feedback, ...extra }, view.login);
-      assert.equal(pr.commentCount > 0, expected, name);
-      assert.equal(view.prMark(pr, {}, {}).items.length, expected ? 3 : 2, `${name}: sidebar rendering`);
+      assert.equal(pr.commentCount > 0, expected, `${name}: comment count`);
+      assert.equal(pr.attentionIds.length > 0, expected, `${name}: published attention`);
       assert.equal(pr.comments.length, name.includes('bot') ? 0 : 1, `${name}: dock excludes bots but keeps resolved human history`);
       console.log(`PASS ${name}`);
     }
@@ -125,11 +124,9 @@ async function main() {
     assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z'), verdict('dede', 'CHANGES_REQUESTED', '2026-11-05T02:00:00Z')] }, 'me').approved, false, 'another reviewer asking for changes blocks it');
     assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'CHANGES_REQUESTED', '2026-11-05T01:00:00Z'), verdict('alfin', 'APPROVED', '2026-11-05T02:00:00Z')] }, 'me').approved, true, 'a reviewer\'s latest verdict wins');
     assert.equal(readPR({ ...fixture, reviewDecision: '', reviews: [verdict('alfin', 'APPROVED', '2026-11-05T01:00:00Z'), verdict('alfin', 'DISMISSED', '2026-11-05T02:00:00Z')] }, 'me').approved, false, 'a dismissed approval no longer counts');
-    const approvedMark = view.prMark(readPR({ ...fixture, reviewDecision: 'APPROVED' }, 'me'), {}, {});
-    assert.ok(!view.prMark(readPR({ ...fixture }, 'me'), {}, {}).items.some(i => i.items?.some(c => String(c.kind).endsWith('/approved.svg'))), 'no icon without approval');
-    const approvedBox = approvedMark.items.find(i => i.items?.some(c => String(c.kind).endsWith('/approved.svg')));
-    assert.ok(approvedBox, 'approved PR renders the approved icon');
-    assert.match(approvedBox.tooltip, /approved/, 'hovering the approved icon says so');
+    const approvedPR = readPR({ ...fixture, reviewDecision: 'APPROVED' }, 'me');
+    assert.equal(approvedPR.approved, true, 'an approved PR is flagged for the sidebar');
+    assert.equal(readPR({ ...fixture }, 'me').approved, false, 'no approval, no flag');
     pr = readPR({ ...feedback, author: { login: 'reviewer' } }, 'me');
     assert.equal(pr.commentCount + pr.comments.length, 0, "the PR creator's own comments never count or show");
     const resolved = { reviewThreads: [{ isResolved: true, comments: { nodes: [{ databaseId: 42 }] } }] };
@@ -151,6 +148,8 @@ async function main() {
     pr = readPR({ ...fixture, reviewComments: [inline, { ...inline, id: 43, html_url: `${inline.html_url}-reply` }] }, 'me');
     assert.equal(pr.comments.filter(c => c.at === inline.created_at).length, 2, 'same-timestamp comments remain distinct');
     const space = { id: 'test', name: 'feature' }, repo = { repo: 'fixture' };
+    // What the sidebar publishes for one checkout: its branch and the spaces on it.
+    const checkout = { ...repo, spaces: [{ id: 'test', name: 'feature' }] };
     view.pr.test = readPR(fixture, view.login);
     view.speak(space, 'test', repo);
     assert.equal(storage.get('github-spaces.comments').test.comments.length, 5);
@@ -168,7 +167,7 @@ async function main() {
     assert.equal(toasts.length, quietToasts + 1, 'the first comment on a comment-free PR notifies');
     const key = JSON.stringify([null, cwd]);
     polledSpaces.push({ ...space, folder: cwd });
-    view.git[key] = { ...repo, branch: 'feature' };
+    view.git[key] = { ...checkout, branch: 'feature' };
     view.asking = new Set(); view.polled = {};
     view.prSeen.add(key);
     fixture.reviewComments = [inline];
@@ -213,11 +212,11 @@ async function main() {
     const shown = () => [0, 1, 2, 3, 4].filter(s => commentCard(s).items.length).length; // blocks with content
     const closeTop = () => commentCard(0).items[0].items[1].on_click({}, { stop_propagation() {} });
     const bodyOf = s => commentCard(s).items[2].items[0];
-    const badgeOf = () => view.prMark(view.pr[key], repo, {}, 'test').items[2];
+    const badgeOf = () => view.pr[key].commentCount;
     assert.equal(shown(), 5, 'five comments render as five independent cards');
     assert.ok(String(commentCard(4).items[0].items[0].items[0]).startsWith('reviewer · '), 'each slot is its own card with its own comment');
     assert.ok(String(commentCard(0).items[1].items[0]).includes('4 more behind'), 'top card counts the others');
-    assert.equal(badgeOf().items[1].items[0], '8', 'sidebar badge counts all pending comments');
+    assert.equal(badgeOf(), 8, 'the published count covers all pending comments');
     const card = storage.get('github-spaces.comments').test;
     const urls = [];
     commentCard(0).items[3].items[0].on_click({}, { stop_propagation() {}, open_url: url => urls.push(url) });
@@ -235,7 +234,7 @@ async function main() {
     closeTop();
     assert.equal(shown(), 4, 'closing slot 0 leaves the rest');
     assert.ok(storage.get('github-spaces.comments').test.dismissedIds.includes(card.comments[0].id), 'comment dismissal is persisted');
-    assert.equal(badgeOf().items[1].items[0], '7', 'closing a card decrements the sidebar badge');
+    assert.equal(badgeOf(), 8, 'closing a card is the sidebar\'s subtraction, not a new count here');
     view.speak(space, key, repo);
     assert.equal(shown(), 4, 'repeat poll does not reopen a closed comment');
     fixture.comments.push(comment(9, '2026-11-03T12:00:00Z'));
@@ -246,9 +245,9 @@ async function main() {
     assert.match(toasts.at(-1).title, /commented/);
     assert.match(toasts.at(-1).body, /Comment 9/, 'the toast names the new comment');
     assert.equal(toasts.at(-1).action.args.id, 'test', 'the toast opens the space');
-    assert.equal(badgeOf().items[1].items[0], '8', 'new feedback counts, closed comments do not return');
+    assert.equal(badgeOf(), 9, 'new feedback counts in the published attention list');
     closeTop();
-    assert.equal(badgeOf().items[1].items[0], '7', 'closing the newest pending card lowers the badge');
+    assert.equal(badgeOf(), 9, 'a dismissed card stays in the published attention list');
     // A close click targets the original comment even if newer activity arrived.
     fixture.comments.push(comment(10, '2026-11-03T13:00:00Z'));
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
@@ -273,13 +272,14 @@ async function main() {
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
     assert.equal(shown(), 1, 'migration keeps old cards closed when a new comment arrives');
     // The refresh key re-polls every space, but not one asked for within 30 seconds.
+    storage.set('spaces.git', { [key]: { ...checkout, branch: 'feature', on: null } });
     view.asking = new Set(); view.polled = {};
-    let gitRefreshed = 0; view.refreshGit = keys => { gitRefreshed += keys.size; };
     let refreshAsked = 0; const gh = githubResponse;
     githubResponse = args => { if (args[0] === 'pr') refreshAsked++; return gh(args); };
+    const askedAt = commands.length;
     tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
     assert.equal(refreshAsked, 1, 'refresh polls the space');
-    assert.ok(gitRefreshed > 0, 'refresh re-checks git state');
+    assert.ok(commands.slice(askedAt).includes('spaces-stacks.refresh'), 'refresh asks the sidebar to re-read git');
     view.asking = new Set();
     tasks.length = 0; view.refresh(cx); await Promise.all(tasks);
     assert.equal(refreshAsked, 1, 'a second refresh within 30s does not hit GitHub again');
@@ -317,7 +317,7 @@ async function main() {
       view.pr = {}; view.act = {}; view.prNum = {}; view.retry = {}; view.tries = {};
       view.ghDead = {}; view.holdUntil = 0; view.prSeen = new Set(); view.mergedDone = new Set();
       view.asking = new Set(); view.polled = {};
-      view.git[key] = { ...repo, branch: 'feature' };
+      view.git[key] = { ...checkout, branch: 'feature' };
       polledSpaces.length = 0;
       polledSpaces.push({ id: 'test', name: 'feature', folder: cwd });
     };
@@ -429,58 +429,12 @@ async function main() {
     // Two spaces in one checkout each get their own dock.
     reset();
     storage.set('github-spaces.comments', {});
-    polledSpaces.push({ id: 'test2', name: 'feature two', folder: cwd });
+    view.git[key] = { ...view.git[key], spaces: [{ id: 'test', name: 'feature' }, { id: 'test2', name: 'feature two' }] };
     githubResponse = realGh;
     tasks.length = 0; view.pollPRs(cx); await Promise.all(tasks);
     const cards = storage.get('github-spaces.comments');
     assert.ok(cards.test && cards.test2, 'both spaces on one checkout are written');
     console.log('PASS two spaces on one checkout both get cards');
-
-    async function verify(name, ahead, behind, red) {
-      await view.check(key, {});
-      const g = view.git[key];
-      assert.ok(g, `${name}: git state loaded`);
-      assert.deepEqual([g.ahead, g.behind], [ahead, behind], name);
-      const button = view.fetchButton({ id: 'test' }, g, { ansi4: 'blue' });
-      assert.equal(button.items[0].text_color, red ? '#ef4444' : 'blue', name);
-      assert.equal(button.items.length, red ? 2 : 1, `${name}: badge visibility`);
-      if (red) assert.equal(button.items[1].items[0], String(behind));
-      if (ahead && behind) {
-        assert.match(button.tooltip, /diverged/);
-        assert.doesNotMatch(button.tooltip, /push after rebase/, 'divergence cannot prescribe a push');
-      }
-      console.log(`PASS ${name}: ahead ${ahead}, behind ${behind}`);
-    }
-    git('init', '--bare', path.join(dir, 'origin.git'));
-    git('init', '-b', 'main');
-    git('config', 'user.name', 'Mod test');
-    git('config', 'user.email', 'mod-test@example.invalid');
-    git('config', 'commit.gpgsign', 'false');
-    git('remote', 'add', 'origin', path.join(dir, 'origin.git'));
-    git('commit', '--allow-empty', '-m', 'root');
-    git('push', '-u', 'origin', 'main');
-    git('checkout', '-b', 'feature');
-    fs.writeFileSync(path.join(cwd, 'feature.txt'), 'feature\n');
-    git('add', '.'); git('commit', '-m', 'feature'); git('push', '-u', 'origin', 'feature');
-    await verify('up to date', 0, 0, false);
-    fs.writeFileSync(path.join(cwd, 'remote.txt'), 'remote\n');
-    git('add', '.'); git('commit', '-m', 'remote change'); git('push');
-    git('reset', '--hard', 'HEAD~'); // Only this disposable fixture, never a user's checkout.
-    await verify('strictly behind', 0, 1, true);
-    git('merge', '--ff-only', '@{upstream}');
-    fs.writeFileSync(path.join(cwd, 'local.txt'), 'local\n');
-    git('add', '.'); git('commit', '-m', 'unpublished change');
-    await verify('ahead only', 1, 0, false);
-    const upstream = git('rev-parse', '@{upstream}');
-    const independent = git('commit-tree', 'HEAD^{tree}', '-p', upstream, '-m', 'independent remote commit');
-    git('update-ref', 'refs/remotes/origin/feature', independent);
-    await verify('independent local and remote commits', 1, 1, false);
-    git('update-ref', 'refs/remotes/origin/feature', upstream);
-    git('checkout', 'main');
-    fs.writeFileSync(path.join(cwd, 'base.txt'), 'updated base\n');
-    git('add', '.'); git('commit', '-m', 'advance base'); git('push');
-    git('checkout', 'feature'); git('rebase', 'origin/main');
-    await verify('rebased onto main, not pushed', 4, 2, false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
