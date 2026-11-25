@@ -84,21 +84,17 @@ Add five `floating` entries (slot 0–4) to the work-area block in your personal
 - Removal requires confirmation. The dialog warns about local changes; removal closes the space and deletes the checkout. The branch remains.
 - Previously handled merges are remembered. Main checkouts are never offered for removal by this mod.
 
-## Refresh key
+## Refresh one repo
 
-Bind a key to re-check git and every PR now instead of waiting for the two-minute poll. Add to the `global` section of `~/.config/herdr-app/keys.json`:
+There is no global refresh key. The sidebar's repo row has a **↻** control beside the fetch arrow: it asks this mod to resolve every branch in that repository again, ignoring the two-minute cycle, the 30-second throttle and the cached PR numbers. Other repos are untouched. Press it as often as you like; a refused refresh (budget paused) shows a toast and changes nothing.
 
-```json
-"cmd-shift-r": "github-spaces.refresh"
-```
-
-It also asks the sidebar to re-read its checkouts. A space whose PR was asked for in the last 30 seconds is skipped, so repeated presses stay cheap on the GitHub API.
+Under the hood the sidebar writes `shared("github-spaces.want") = { repo, at }` and this mod's one-second check picks it up.
 
 ## Limits and troubleshooting
 
 - **No PR marks:** wait for a polling cycle, then run `gh pr view` from the checkout. Confirm the branch has a PR and `gh` has access. If the sidebar never publishes `spaces.git` (older layout, `spaces` still mounted), this mod has nothing to answer for and stays silent.
 - **Remote spaces:** `gh` runs on that space's machine. A place whose folder is gone retries with its own growing delay; a machine where `gh` is missing or not signed in pauses for 30 minutes. Authentication failures also prevent fresh results.
-- **Rate limits:** the GraphQL budget is read from the answers themselves. Below 120 points, polling stops until the reset time and the **Spaces** header says when it resumes; pressing the refresh key while paused shows a toast instead of polling. Marks keep their last value, and a reload keeps them too: known PR numbers are cached in `localStorage` (`pr.numbers`), so a restart batches by number instead of resolving every branch again.
+- **Rate limits:** the GraphQL budget is read from the answers themselves. Below 120 points, polling stops until the reset time and the **Spaces** header says when it resumes; a per-repo refresh while paused shows a toast instead of polling. Marks keep their last value, and a reload keeps them too: known PR numbers are cached in `localStorage` (`pr.numbers`), so a restart batches by number instead of resolving every branch again.
 - **Checks:** an empty check list currently counts as passing. Green is not a guarantee of merge readiness.
 - **Comments:** discussion comments, nonempty submitted review summaries, and inline replies are checked every two minutes. Bot accounts, usernames containing `bot` (case-insensitive), your own account's comments, and the PR creator's comments are excluded from both cards and badge. A commit newer than a comment clears it from the badge (cards remain). Edits are not tracked. Own-comment filtering uses the local `gh` account, which may differ from a remote machine's account.
 - **Installed copies:** `~/.config/herdr-app/mods/github-spaces` is a copy, not a link. Sync after changes here.
@@ -113,6 +109,7 @@ This is trusted code: it queries GitHub, reads repository state, and runs `gh`. 
 | `github-spaces.prs` | writes | reads |
 | `github-spaces.comments` | writes | reads (dismissed cards) |
 | `github-spaces.hold` | writes | reads (rate-limit tooltip) |
+| `github-spaces.want` | reads (repo ↻) | writes |
 
 `github-spaces.prs` maps `` `${repo}|${branch}` `` to `{ number, url, state, base, conflict, ci, approved, attentionIds }`; `base` is the PR's `baseRefName`. Values are written only when they change, because a write re-renders every mod.
 

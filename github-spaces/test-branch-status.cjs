@@ -40,7 +40,6 @@ async function main() {
   };
   try {
     const cardsWritten = [];
-    const commands = [];
     const toasts = [];
     const storage = new Map();
     const polledSpaces = [];
@@ -49,7 +48,6 @@ async function main() {
     const { GitHubInfo, readPR } = vm.runInNewContext(`${source}\n({ GitHubInfo, readPR })`, {
       View: class {}, div: () => element('div'), h_flex: () => element('row'),
       svg: (p) => element(p), exec,
-      run: name => { commands.push(name); return null; },
       notify: n => toasts.push(n),
       shared: k => storage.get(k),
       setShared: (k, v) => { storage.set(k, v); cardsWritten.push(v); },
@@ -286,19 +284,23 @@ async function main() {
     fixture.comments.push(comment(13, '2026-11-03T16:00:00Z'));
     tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(shown(), 1, 'migration keeps old cards closed when a new comment arrives');
-    // The refresh key re-polls every space, but not one asked for within 30 seconds.
+    // One repo, on demand: every branch there is asked again, and only that repo.
     storage.set('spaces.git', { [key]: { ...checkout, branch: 'feature', on: null } });
+    view.git[key] = { ...checkout, branch: 'feature', on: null };
+    const otherKey = JSON.stringify([null, '/other']);
+    view.git[otherKey] = { repo: 'other', branch: 'x', on: null, spaces: [{ id: 'o', name: 'o' }] };
+    view.prNum[otherKey] = { number: 7, url: 'https://github.com/o/o/pull/7', branch: 'x', open: true, at: Date.now() };
     view.asking = new Set(); view.polled = {};
     let refreshAsked = 0; const gh = githubResponse;
     const isPoll = args => args[0] === 'pr' || (args.includes('graphql') && /pullRequest\(number:\d/.test(args.find(a => String(a).startsWith('query=')) ?? ''));
     githubResponse = args => { if (isPoll(args)) refreshAsked++; return gh(args); };
-    const askedAt = commands.length;
-    tasks.length = 0; view.refresh(cx); await settle();
-    assert.equal(refreshAsked, 1, 'refresh polls the space');
-    assert.ok(commands.slice(askedAt).includes('spaces-stacks.refresh'), 'refresh asks the sidebar to re-read git');
-    view.asking = new Set();
-    tasks.length = 0; view.refresh(cx); await settle();
-    assert.equal(refreshAsked, 1, 'a second refresh within 30s does not hit GitHub again');
+    tasks.length = 0; view.refreshRepo('fixture', cx); await settle();
+    assert.equal(refreshAsked, 1, 'a repo refresh asks its branch again');
+    assert.ok(view.prNum[otherKey], 'another repo\'s cached PR is untouched');
+    refreshAsked = 0; view.asking = new Set();
+    tasks.length = 0; view.refreshRepo('fixture', cx); await settle();
+    assert.equal(refreshAsked, 1, 'a second on-demand refresh asks again instead of throttling');
+    delete view.git[otherKey];
     githubResponse = gh;
     assert.equal(toasts.at(-1).timeout, 15000, 'comment toasts stay up for 15 seconds');
     // A reload forgets what it saw: a comment that arrived meanwhile still notifies, once.

@@ -5,12 +5,12 @@
 // It also keeps the comment cards (dock.js), their counts, and the merge and
 // comment notifications.
 //
-// The sidebar copy and this one are two mods, so neither can call the other:
-// run("<mod>.<command>") is the way to ask the other copy to look again.
+// There is no global refresh: the sidebar's per-repo control posts
+// shared "github-spaces.want" and this mod re-resolves that one repo.
 
 import { View, div } from "gpui-kit";
 import { commentCard } from "./dock.js";
-import { run, openOverlay, exec, shared, setShared, window, notify, props, nextCommand } from "herdr";
+import { openOverlay, exec, shared, setShared, window, notify, props } from "herdr";
 
 // Resolution is exposed on review threads, not on REST review comments. The
 // budget comes back with the answer, free, so polling can stop before failing.
@@ -128,6 +128,7 @@ export default class GitHubInfo extends View {
     this.login = null; // gh account, so own comments don't notify
     this.published = null; // the PR map as last written, so an unchanged poll writes nothing
     this.wroteAt = 0; // last shared write: answers arrive in bursts, renders cost more than the write
+    this.wantAt = 0; // the last on-demand repo refresh the sidebar asked for
     cx.spawn(async (cx) => {
       try {
         const r = await exec("gh", ["api", "user", "--jq", ".login"]);
@@ -141,10 +142,8 @@ export default class GitHubInfo extends View {
     cx.timer.every(15000, (cx) => this.sync(cx));
     cx.timer.every(120000, (cx) => this.pollPRs(cx));
     cx.timer.every(1000, () => this.publish()); // answers suppressed by the write gap land here
-    // keys.json: "cmd-shift-r": "github-spaces.refresh"
-    cx.spawn(async (cx) => {
-      for (;;) if ((await nextCommand()) === "refresh") this.refresh(cx);
-    });
+    // The sidebar's refresh control per repo: shared "github-spaces.want".
+    cx.timer.every(1000, (cx) => this.checkWant(cx));
   }
 
   // The sidebar's checkouts, as of its last look. A changed set (new space, a cd,
@@ -188,16 +187,26 @@ export default class GitHubInfo extends View {
     this.prSeen.delete(key);
   }
 
-  // Look at every published checkout again now. A place polled in the last 30s
-  // is skipped, so mashing the key is cheap on the GitHub API.
-  refresh(cx) {
-    run("spaces-stacks.refresh");
+  // One repo, on demand: every branch there is asked again, ignoring the
+  // throttle and the number cache. Asked for by the sidebar's row control, one
+  // repo at a time; there is no global refresh.
+  refreshRepo(repo, cx) {
     if (Date.now() < this.holdUntil) {
       notify({ title: "GitHub paused", body: `Rate limit: PR marks resume ${new Date(this.holdUntil).toISOString().slice(11, 16)} UTC.`, level: "warning", timeout: 8000 });
       return;
     }
-    this.sync(cx);
-    this.pollPRs(cx, (k) => Date.now() - (this.polled[k] ?? 0) > 30000);
+    for (const [key, g] of Object.entries(this.git)) {
+      if (g.repo !== repo) continue;
+      delete this.prNum[key]; delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
+    }
+    this.pollPRs(cx, (k) => this.git[k]?.repo === repo);
+  }
+
+  checkWant(cx) {
+    const want = shared("github-spaces.want");
+    if (!want?.at || want.at <= this.wantAt) return;
+    this.wantAt = want.at;
+    this.refreshRepo(want.repo, cx);
   }
 
   // Poll in background too. A known PR number is refreshed with one query per

@@ -109,6 +109,7 @@ export default class Spaces extends View {
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
     this.published = null; // the checkouts handed to github-spaces, as last written
+    this.repoBusy = null; // { repo, at }: a per-repo PR refresh just asked for
     this.rebasing = {}; // space id -> a fetch/rebase in flight
     try {
       this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
@@ -120,8 +121,8 @@ export default class Spaces extends View {
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
-    // keys.json: "cmd-shift-r": "spaces-stacks.refresh" (also sent by the
-    // branch picker after a switch, and by github-spaces' own refresh key).
+    // The branch picker asks this copy to re-read git after a switch:
+    // run("spaces-stacks.refresh") delivers "refresh" here.
     cx.spawn(async (cx) => {
       for (;;) if ((await nextCommand()) === "refresh") this.refreshGit(new Set(Object.keys(this.git)), cx);
     });
@@ -379,6 +380,9 @@ export default class Spaces extends View {
     const list = sp.map((w, i) => { const k = where(w, ps); return { w, i, k, g: this.git[k] ?? null }; });
     const mains = new Map(); // repo -> the row that is the repo's own checkout
     for (const r of list) if (r.g && !r.g.linked && !mains.has(r.g.repo)) mains.set(r.g.repo, r);
+    const first = new Map(); // repo -> its first row, for repos with no main checkout space
+    for (const r of list) if (r.g && !first.has(r.g.repo)) first.set(r.g.repo, r);
+    const rootOf = (r) => r.g ? (mains.get(r.g.repo) ?? first.get(r.g.repo)) : null;
     const parent = new Map();
     for (const r of list) {
       if (!r.g) continue;
@@ -394,7 +398,7 @@ export default class Spaces extends View {
     const visit = (r, depth) => {
       if (seen.has(r)) return; // a retargeted pair pointing at each other
       seen.add(r);
-      out.push({ ...r, depth });
+      out.push({ ...r, depth, root: rootOf(r) === r });
       for (const c of list) if (parent.get(c) === r) visit(c, depth + 1);
     };
     for (const r of list) if (!parent.get(r)) visit(r, 0);
@@ -542,7 +546,7 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, depth }, t) {
+  row({ w, i, g, depth, root }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
@@ -599,6 +603,7 @@ export default class Spaces extends View {
           // A plain space shows open PRs only; old merged ones are noise.
           .when(!(depth > 0) && pr?.state === "OPEN", el => el.child(this.prMark(pr, t, w.id)))
           .when(Boolean(g), el => el.child(this.fetchButton(w, g, t)))
+          .when(Boolean(root) && Boolean(g?.branch), el => el.child(this.refreshButton(w, g, t)))
           .child(g ? this.gitTail(g, depth, w.name, t, w) : div().flex_1()),
       );
   }
@@ -657,10 +662,29 @@ export default class Spaces extends View {
         .child(div().text_size(10).font_bold().child(String(count)))));
   }
 
+  // Ask github-spaces to resolve every branch in this repo again. One repo at a
+  // time, on demand; there is no global refresh. The glyph spins for a moment
+  // because the answer is not local: the marks themselves move when it lands.
+  refreshButton(w, g, t) {
+    const busy = this.repoBusy?.repo === g.repo && Date.now() - this.repoBusy.at < 2500;
+    return h_flex().id(`prr-${w.id}`).flex_none().items_center().justify_center().size(16).rounded(4).cursor_pointer()
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); this.refreshPRs(g, cx); })
+      .hover(s => s.bg(t.hover))
+      .tooltip("Refresh this repo's PR status")
+      .child(div().text_size(13).text_color(busy ? t.accent : t.muted).child("\u21bb"));
+  }
+
+  refreshPRs(g, cx) {
+    this.repoBusy = { repo: g.repo, at: Date.now() };
+    setShared("github-spaces.want", { repo: g.repo, at: Date.now() });
+    cx.notify();
+    cx.timer.after(2500, (cx) => { this.repoBusy = null; cx.notify(); });
+  }
+
   // Only strictly behind is red; divergence may be a rebase or new remote
   // commits, so counts alone cannot recommend rebasing or pushing.
-  fetchButton(w, g, t) {
-    const behind = g?.behind ?? 0;
+  fetchButton(w, g, t) {    const behind = g?.behind ?? 0;
     const needs = behind > 0 && (g?.ahead ?? 0) === 0;
     const tip = needs ? `git fetch + rebase · ${behind} behind`
       : behind > 0 ? `diverged · ↑${g.ahead} ↓${behind} — inspect history before rebase or push`

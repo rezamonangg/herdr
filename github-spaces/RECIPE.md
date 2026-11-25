@@ -17,6 +17,7 @@ This is a build brief, not an installation guide. See [README](../github-spaces/
 | `github-spaces.prs` | info | sidebar | `` `${repo}|${branch}` `` → `{ number, url, state, base, conflict, ci, approved, attentionIds }` |
 | `github-spaces.comments` | info | sidebar, cards | space id → saved cards, `attentionIds`, `dismissedIds` |
 | `github-spaces.hold` | info | sidebar | ms until polling resumes |
+| `github-spaces.want` | sidebar | info | `{ repo, at }`: refresh every branch in one repo now |
 
 `setShared` re-renders every mod, so every writer compares its JSON first. `where()` is `JSON.stringify([machine, folder])`, the same key both mods already used for git state.
 
@@ -27,7 +28,7 @@ Mods cannot call each other. To ask the other copy to look again: `run("<mod>.<c
 - The sidebar block uses `spaces-stacks`.
 - `github-spaces` is mounted as a `1px` block (`{"id":"github-info","type":"block","size":{"px":1}}`), like `panel-keys`: mounted means its timers run.
 - Five floating comment-card blocks use `github-spaces` with `props.role: "comment"`.
-- No shipped layout or key binding changes. The refresh key stays `github-spaces.refresh`; the info mod forwards to `spaces-stacks.refresh`.
+- No shipped layout or key binding changes. A repo refresh is on demand only: the sidebar's repo row writes `shared("github-spaces.want")` and the info mod answers that one repo. There is no global refresh key.
 
 ## Sidebar: `spaces-stacks`
 

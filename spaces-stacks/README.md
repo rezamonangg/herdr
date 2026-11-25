@@ -66,7 +66,7 @@ GitHub Spaces        main  ↓2
 - Two PRs retargeted at each other cannot loop: each space appears once.
 - Indentation only. Hover a mark for its PR number and status.
 
-Nesting is as fresh as the last poll (two minutes, or press the refresh key). A retargeted PR moves one cycle later.
+Nesting is as fresh as the last poll (two minutes, or the repo row's **↻** control). A retargeted PR moves one cycle later.
 
 ## Branch switcher
 
@@ -88,6 +88,8 @@ A nested row shows its branch too when its name is not that branch (`daily proxy
 Kept from the shipped sidebar: selection, drag-to-reorder, right-click menu, machine groups with reconnect and login notes, the compact rail, scroll-to-active, and automatic reordering to match the tree.
 
 The download-arrow button beside each repo's name runs `git fetch` then `git rebase` against the branch's configured upstream, and is red with a count while strictly behind. It never pushes, resolves conflicts or aborts.
+
+The **↻** button on a repo's top row asks GitHub for every branch in that repository again — all its worktrees, marks and counts — not just the branch you clicked. It spins for a moment; the marks move when the answer lands. There is no global refresh key. A paused budget answers with a toast instead.
 
 ## Limits
 
@@ -121,5 +123,6 @@ The stacks check covers stack depth from PR bases, unknown bases, missing main c
 | `github-spaces.prs` | `github-spaces` | this mod |
 | `github-spaces.comments` | `github-spaces` | this mod (dismissed cards) and the comment cards |
 | `github-spaces.hold` | `github-spaces` | this mod (header tooltip) |
+| `github-spaces.want` | this mod (repo row ↻) | `github-spaces` |
 
 `spaces.git` maps a checkout to `{ on, repo, branch, linked, spaces: [{ id, name }] }`. `github-spaces.prs` maps `` `${repo}|${branch}` `` to `{ number, url, state, base, conflict, ci, approved, attentionIds }`. Both are written only when they change; a write re-renders every mod.

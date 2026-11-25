@@ -95,6 +95,7 @@ async function main() {
     const by = (id) => rows.find(r => r.w.id === id);
     assert.deepEqual([...rows.map(r => [r.w.id, r.depth])], [['main', 0], ['a', 1], ['b', 2], ['c', 1]],
       'a worktree nests under the worktree its PR targets, depth-first');
+    assert.deepEqual([...rows.filter(r => r.root).map(r => r.w.id)], ['main'], 'one repo, one refresh control');
     console.log('PASS stack depth follows the PR base branch');
 
     // The sidebar hands github-spaces the checkouts it knows, spaces included.
@@ -153,6 +154,15 @@ async function main() {
     view.publish();
     assert.equal(storage.get('spaces.git')[JSON.stringify([null, '/repo'])], undefined, 'detached checkouts are not published');
     console.log('PASS detached checkouts are not published');
+
+    // A space that is not a repo still renders, with no repo controls.
+    spaces = [{ id: 'plain', name: 'scratch', folder: '/tmp/scratch' }];
+    view.shown = new Set(['plain']);
+    view.git = {};
+    rows = view.ordered();
+    assert.equal(rows.length, 1, 'a non-repo space is drawn');
+    assert.equal(rows[0].root, false, 'and is nobody\'s refresh control');
+    console.log('PASS non-repo spaces render without repo controls');
 
     // --- marks come from the info mod, counts subtract dismissed cards ---
     view.cardsView = null; view.prsView = null;
