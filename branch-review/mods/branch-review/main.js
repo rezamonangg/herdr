@@ -226,13 +226,16 @@ function cwdCandidates(loc) {
 }
 
 async function pickRepo(loc) {
+  let failed = null;
   for (const cwd of cwdCandidates(loc)) {
     try {
       const r = await git(["rev-parse", "--show-toplevel"], { cwd, on: loc.on });
       if (r.code === 0 && r.stdout.trim()) return { cwd, root: r.stdout.trim() };
-    } catch { /* next */ }
+    } catch (e) { failed = message(e); }
   }
-  return null;
+  // "Not a repo" and "git could not run" are different answers: a machine that
+  // is asleep should not be reported as a plain folder.
+  return failed ? { error: failed } : null;
 }
 
 function savedBase(key) { return (shared(BASE_KEY) ?? {})[key] ?? null; }
@@ -272,6 +275,7 @@ export default class BranchReview extends View {
     const overlay = props()?.overlay;
     if (overlay) {
       this.launcher = true;
+      if (checking()) { closeOverlay(overlay); return; }
       const space = spaces().find((s) => s.active);
       const mine = space && panes().find((p) => p.mod === "branch-review" && space.tabs.some((t) => t.id === p.tab));
       const current = focused()?.tab;
@@ -314,16 +318,29 @@ export default class BranchReview extends View {
   }
 
   kick(cx, opts) {
-    if (this.loading || this.starting) return;
+    // A click during a load is the newest wish, not noise: run it when the
+    // current one settles.
+    if (this.loading || this.starting) { this.pending = opts ?? {}; return; }
     this.starting = true;
     return cx.spawn(async (cx) => {
-      try { await this.load(cx, opts); } finally { this.starting = false; }
+      try { await this.load(cx, opts); }
+      finally {
+        this.starting = false;
+        if (this.pending !== undefined) {
+          const next = this.pending;
+          this.pending = undefined;
+          this.kick(cx, next);
+        }
+      }
     });
   }
 
   async load(cx, { base } = {}) {
     const loc = location(this.ctx);
     if (!loc.cwd) {
+      // Remember the key even when there is nothing to load, or render() would
+      // kick again on every frame and the tab would never settle.
+      this.wantKey = keyOf(loc);
       this.error = "No folder";
       this.reset(cx);
       return;
@@ -332,16 +349,23 @@ export default class BranchReview extends View {
     this.error = null;
     try {
       const picked = await pickRepo(loc);
-      if (!picked) {
+      if (!picked || picked.error) {
+        this.wantKey = keyOf(loc); // say so and stop retrying on every render
+        this.error = picked?.error
+          ? `Could not run git: ${picked.error} — ↺ to retry`
+          : "Not a git repository — ↺ to retry";
         this.reset(cx);
-        this.error = "Not a git repository";
         return;
       }
       const ctx = { cwd: picked.cwd, on: loc.on };
       const root = picked.root;
       const moved = this.ctx?.cwd !== picked.cwd || this.ctx?.on !== loc.on;
       this.ctx = { ...loc, cwd: picked.cwd };
-      this.wantKey = keyOf(this.ctx);
+      // The key render compares is keyOf(location()), i.e. the folder it asked
+      // about, not the folder git found: otherwise a repo found in a sibling
+      // candidate reloads on every frame.
+      this.wantKey = keyOf(loc);
+      this.root = root;
       if (moved) {
         this.files = [];
         this.where = null;
@@ -367,15 +391,15 @@ export default class BranchReview extends View {
       }
       const target = chosen ?? def;
       if (!target) {
-        this.reset(cx);
         this.error = "No base branch found — choose one.";
+        this.reset(cx);
         return;
       }
       this.base = target;
       const mb = await gitText(["merge-base", target, "HEAD"], ctx);
       if (!mb) {
+        this.error = `No common ancestor with ${target}. Choose another base.`;
         this.reset(cx);
-        this.error = `No common ancestor with ${target}.`;
         return;
       }
       this.where = { root, on: loc.on ?? null, base: { label: target, merge_base: mb } };
@@ -421,8 +445,12 @@ export default class BranchReview extends View {
 
   choose(cx, label) {
     this.choosing = false;
-    if (!this.where || label === this.base) return;
-    rememberBase(`${this.ctx?.on ?? ""}:${this.where.root}`, label);
+    // where is null when the last load failed (no merge-base, unrelated
+    // branches, a shallow clone); the repo root is still known, so a base can
+    // still be picked and tried.
+    const root = this.where?.root ?? this.root;
+    if (!root || label === this.base) return;
+    rememberBase(`${this.ctx?.on ?? ""}:${root}`, label);
     return this.kick(cx, { base: label });
   }
 
@@ -439,6 +467,8 @@ export default class BranchReview extends View {
         this.oneSided = cached.one ?? null;
         this.diffLoading = false;
         cx.notify();
+      } else if (token === this.diffSeq) {
+        this.diffLoading = false; // this pick is over; the newer one owns the flag
       }
       return;
     }
@@ -468,9 +498,9 @@ export default class BranchReview extends View {
       const hasAdd = rows.some((row) => row.k === "add");
       const hasDel = rows.some((row) => row.k === "del");
       const hasCtx = rows.some((row) => row.k === "ctx");
+      if (token !== this.diffSeq) return; // a newer pick owns the view now
       this.oneSided = !hasDel && !hasCtx ? "new" : !hasAdd && !hasCtx ? "old" : null;
       if (!rows.length) this.diffNote = file.add === null && file.del === null ? "Binary file" : "No text changes";
-      if (token !== this.diffSeq) return;
 
       // Show the plain rows first; whole-file Prism tokenising happens after
       // the frame is painted, so a large file never hides the diff.

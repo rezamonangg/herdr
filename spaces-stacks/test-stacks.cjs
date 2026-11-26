@@ -176,6 +176,10 @@ async function main() {
     const bubble = mark.items.find(i => typeof i.tooltip === 'string' && i.tooltip.includes('need attention'));
     assert.equal(bubble.items[1].items[0], '1', 'a dismissed card lowers the visible count');
     assert.ok(mark.items.some(i => i.items?.some(c => String(c.kind).endsWith('/approved.svg'))), 'an approval shows its shield');
+    storage.set('github-spaces.comments', {}); view.cardsView = null;
+    const historyMark = view.prMark({ number: 9, state: 'OPEN', conflict: false, ci: 'pass', attentionIds: [], commentsTotal: 3 }, t, 'a');
+    const history = historyMark.items.find(i => typeof i.tooltip === 'string' && i.tooltip.includes('none pending'));
+    assert.equal(history.items[1].items[0], '3', 'comments with nothing pending still show a dim count');
     const conflictMark = view.prMark({ number: 6, state: 'OPEN', conflict: true, ci: 'pass', attentionIds: [] }, t, 'a');
     assert.ok(conflictMark.items[0].kind.endsWith('/conflict.svg'), 'conflicts beat passing checks');
     const mergedMark = view.prMark({ number: 7, state: 'MERGED', conflict: true, ci: 'pass', attentionIds: [] }, t, 'a');

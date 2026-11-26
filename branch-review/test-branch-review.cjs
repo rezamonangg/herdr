@@ -23,6 +23,7 @@ async function main() {
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
   const storage = new Map();
+  let where = repo;
   try {
     git('init', '-b', 'main');
     git('config', 'user.name', 'Mod test');
@@ -66,9 +67,9 @@ async function main() {
       Scrollbar: { vertical: () => ({}) }, v_virtual_list: () => ({}),
       checking: () => true, exec, appHome: () => dir, readTextFile: async (p) => { try { return fs.readFileSync(p, "utf8"); } catch { return null; } },
       settings: () => ({ font_size: 13, font_family: 'mono' }), theme: () => ({ background: '#111111' }),
-      focused: () => ({ tab: 't1', pane: null, cwd: repo, space: 's1' }),
+      focused: () => ({ tab: 't1', pane: null, cwd: where, space: 's1' }),
       panes: () => [],
-      spaces: () => [{ id: 's1', active: true, folder: repo, machine: null, tabs: [{ id: 't1', active: true }] }],
+      spaces: () => [{ id: 's1', active: true, folder: where, machine: null, tabs: [{ id: 't1', active: true }] }],
       props: () => ({}), shared: (k) => storage.get(k), setShared: (k, v) => storage.set(k, v),
       colorRows: (rows) => { for (const row of rows) if (row.m !== undefined) row.code = [[row.m, null]]; return rows.length; },
       languageFor: () => null,
@@ -139,6 +140,18 @@ async function main() {
     assert.match(review.flash, /not found/);
     assert.equal(review.base, 'origin/main');
     console.log('PASS missing base is reported');
+
+    // A folder that is not a repo settles on a message instead of reloading on
+    // every frame: the asked key is remembered.
+    const plain = path.join(dir, 'plain');
+    fs.mkdirSync(plain);
+    where = plain;
+    review.wantKey = null;
+    await review.load(cx);
+    assert.match(review.error, /Not a git repository/);
+    assert.equal(review.loading, false, 'it stops loading');
+    assert.equal(review.wantKey, JSON.stringify([plain, null, 't1']), 'the asked key is stored, so render does not kick again');
+    console.log('PASS a non-git folder settles instead of reloading');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

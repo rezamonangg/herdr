@@ -14,7 +14,7 @@ This is a build brief, not an installation guide. See [README](../github-spaces/
 | Shared key | Writer | Reader | Shape |
 | --- | --- | --- | --- |
 | `spaces.git` | sidebar | info | `where()` → `{ on, repo, branch, linked, spaces: [{ id, name }] }` |
-| `github-spaces.prs` | info | sidebar | `` `${repo}|${branch}` `` → `{ number, url, state, base, conflict, ci, approved, attentionIds }` |
+| `github-spaces.prs` | info | sidebar | `` `${repo}|${branch}` `` → `{ number, url, state, base, conflict, ci, approved, attentionIds, commentsTotal }` |
 | `github-spaces.comments` | info | sidebar, cards | space id → saved cards, `attentionIds`, `dismissedIds` |
 | `github-spaces.hold` | info | sidebar | ms until polling resumes |
 | `github-spaces.want` | sidebar | info | `{ repo, at }`: refresh every branch in one repo now |
@@ -51,7 +51,7 @@ Start from Herdr's shipped `spaces` mod; never edit the original. Keep its selec
 
 ### Marks and arrow
 
-Draw the PR mark from `github-spaces.prs`: conflict beats CI; merged and closed beat both; failed beats running beats passing. The attention bubble is `attentionIds` minus `dismissedIds` from the saved cards. Plain spaces show open PRs only; worktree rows show merged and closed too.
+Draw the PR mark from `github-spaces.prs`: conflict beats CI; merged and closed beat both; failed beats running beats passing. The attention bubble is `attentionIds` minus `dismissedIds` from the saved cards; when that is empty but `commentsTotal` is not, draw a dim count so superseded discussion stays visible. Plain spaces show open PRs only; worktree rows show merged and closed too.
 
 The fetch arrow is a row control: red with a count when strictly behind, blue otherwise, spinner while this mod's fetch/rebase runs. Run `git fetch`, then plain `git rebase`; never push, resolve or abort.
 
@@ -86,7 +86,7 @@ Activity lists are fetched only when `updatedAt` moved or no complete read exist
 
 ### Comment counts
 
-Attention = unresolved human comments newer than the PR's latest commit, on an open PR. Publish the ids; the sidebar subtracts cards the person closed. Cards keep the latest five. A first comment on a comment-free PR notifies; a comment that arrived while Herdr was closed notifies once.
+Attention = unresolved human comments newer than the PR's latest commit, on an open PR. Publish the ids plus `commentsTotal` (all human comments); the sidebar subtracts cards the person closed and shows a dim count when nothing is pending. Cards keep the latest five. A first comment on a comment-free PR notifies; a comment that arrived while Herdr was closed notifies once.
 
 ## Done when
 

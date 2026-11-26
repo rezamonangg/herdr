@@ -99,6 +99,7 @@ function readPR(j, login) {
     approved,
     ci: fail ? "fail" : run || j.ciComplete === false ? "run" : "pass",
     comments: comments.slice(0, 5),
+    commentsTotal: comments.length,
     attentionIds,
     commentCount: attentionIds.length,
   };
@@ -114,6 +115,7 @@ export default class GitHubInfo extends View {
     this.act = {}; // where() -> the last complete comment snapshot and its updatedAt
     this.prSeen = new Set(); // where()s that answered once (their first PR look stays quiet)
     this.asking = new Set(); // where()s a gh call is out for
+    this.askingAt = {}; // when each of those started, so a dropped task cannot wedge a key
     this.polled = {}; // where() -> when its PR was last asked for
     this.retry = {}; // where() -> when to ask again after a failure
     this.tries = {}; // where() -> consecutive failures, for the backoff
@@ -165,6 +167,7 @@ export default class GitHubInfo extends View {
       if (next[key]) continue;
       delete this.pr[key]; delete this.prNum[key]; delete this.act[key];
       delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
+      this.markDone(key);
     }
     this.git = next;
     for (const [key, g] of Object.entries(next)) {
@@ -184,6 +187,7 @@ export default class GitHubInfo extends View {
     delete this.polled[key];
     delete this.retry[key];
     delete this.tries[key];
+    this.markDone(key); // do not leave the old branch's call marked in flight
     this.prSeen.delete(key);
   }
 
@@ -219,7 +223,7 @@ export default class GitHubInfo extends View {
     if (now < this.holdUntil) return; // the shared budget is spent
     const groups = new Map();
     for (const [key, g] of Object.entries(this.git)) {
-      if (!g.branch || this.asking.has(key) || (only && !only(key))) continue;
+      if (!g.branch || this.inFlight(key, now) || (only && !only(key))) continue;
       if (now < (this.retry[key] ?? 0) || now < (this.ghDead[g.on ?? null] ?? 0)) continue;
       let group = groups.get(g.repo);
       if (!group) groups.set(g.repo, group = { on: g.on ?? null, jobs: [] });
@@ -374,11 +378,19 @@ export default class GitHubInfo extends View {
 
   mark(key) {
     this.asking.add(key);
+    (this.askingAt ??= {})[key] = Date.now();
     this.polled[key] = Date.now();
   }
 
   markDone(key) {
     this.asking.delete(key);
+    if (this.askingAt) delete this.askingAt[key];
+  }
+
+  // A gh call that never finished (a dropped task, a reload) must not stop this
+  // key for good. Past a minute, ask again.
+  inFlight(key, now) {
+    return this.asking.has(key) && now - ((this.askingAt ?? {})[key] ?? 0) < 60000;
   }
 
   // The answer belongs to the branch that was asked about. If the checkout moved
@@ -592,7 +604,7 @@ export default class GitHubInfo extends View {
       map[k] = {
         number: pr.number, url: pr.url, state: pr.state, base: pr.base,
         conflict: pr.conflict, ci: pr.ci, approved: pr.approved,
-        attentionIds: pr.attentionIds,
+        attentionIds: pr.attentionIds, commentsTotal: pr.commentsTotal ?? 0,
       };
     }
     this.lastPrs = map;

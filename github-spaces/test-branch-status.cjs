@@ -91,6 +91,7 @@ async function main() {
     assert.equal(pr.comments.length, 5, 'dock keeps only five comments');
     assert.deepEqual(Array.from(pr.comments, c => c.body), ['Comment 7', 'Comment 6', 'Comment 5', 'Comment 4', 'Comment 3']);
     assert.equal(pr.commentCount, 7, 'sidebar count includes human feedback beyond the five dock entries');
+    assert.equal(pr.commentsTotal, 7, 'total human comments are published for the dim history count');
     const inline = { id: 42, user: { login: 'reviewer', type: 'User' },
       created_at: '2026-11-03T09:00:00Z', body: 'Please fix this line',
       html_url: 'https://github.com/test/repo/pull/1063#discussion_r42' };
@@ -519,6 +520,20 @@ async function main() {
     assert.equal(view.pr[key], undefined, 'the old branch\'s answer is dropped');
     assert.equal(storage.get('github-spaces.prs')['fixture|switched'], undefined, 'and never published under the new branch');
     console.log('PASS a branch switch clears the old answer');
+
+    // A dropped gh call must not wedge a branch: past a minute it is asked
+    // again, and a branch that moved is never left marked in flight.
+    reset();
+    view.asking.add(key); view.askingAt = { [key]: Date.now() - 61000 };
+    let staleAsked = 0; const realStale = githubResponse;
+    githubResponse = args => { if (isPoll(args)) staleAsked++; return realStale(args); };
+    tasks.length = 0; view.pollPRs(cx); await settle();
+    assert.equal(staleAsked, 1, 'a stale in-flight mark is asked again');
+    view.asking.add(key); view.askingAt = { [key]: Date.now() };
+    view.moved(key);
+    assert.ok(!view.asking.has(key), 'a moved branch drops its in-flight mark');
+    githubResponse = realStale;
+    console.log('PASS a dropped call cannot wedge a branch');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

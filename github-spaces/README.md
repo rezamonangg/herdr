@@ -52,7 +52,7 @@ The sidebar draws these from this mod's answers:
 | Grey minus | PR closed without merging |
 | Original icon | No known PR for the branch |
 
-Hover a mark for its PR number and status. **💬 N** counts pending human comments, including comments older than the five shown as cards.
+Hover a mark for its PR number and status. **💬 N** in the accent color counts pending human comments, including comments older than the five shown as cards. A dim **💬 N** means the PR has human comments but nothing needs attention — they are resolved, or a later commit superseded them; the cards remain.
 
 Four things lower the count: GitHub review threads resolving, you closing that comment's card, the PR closing/merging, or **a commit pushed after the comment** (only comments newer than the PR's latest commit count; the cards stay). Opening the space or following a link changes nothing. Comments beyond the latest five cannot be closed from a card; they leave the count only through resolution. Bot accounts never count.
 

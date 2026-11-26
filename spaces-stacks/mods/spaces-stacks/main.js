@@ -122,6 +122,7 @@ export default class Spaces extends View {
       for (const state of Object.values(this.reconnecting)) state.busy = false;
     } catch { this.reconnecting = {}; }
     try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
+    this.colorize();
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -142,7 +143,7 @@ export default class Spaces extends View {
     // A space added or closed changes what the info mod answers for. Order alone
     // does not: renders reorder rows, and publishing on that would feed itself.
     const ids = sp.map(s => s.id).sort().join(",");
-    if (ids !== this.publishedSpaces) { this.publishedSpaces = ids; this.publish(); }
+    if (ids !== this.publishedSpaces) { this.publishedSpaces = ids; this.colorize(); this.publish(); }
     if (sp.some((s) => !this.shown.has(s.id)) || this.orderingDue(now)) cx.notify();
   }
 
@@ -382,6 +383,7 @@ export default class Spaces extends View {
     // from here, and each read copies the whole store.
     this.prsView = shared("github-spaces.prs") ?? {};
     this.cardsView = shared("github-spaces.comments") ?? {};
+    this.colorsView = shared("space.colors") ?? {};
     const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
     for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
     const list = sp.map((w, i) => { const k = where(w, ps); return { w, i, k, g: this.git[k] ?? null }; });
@@ -556,7 +558,7 @@ export default class Spaces extends View {
   row({ w, i, g, depth, root }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
-    const colors = shared("space.colors") ?? {};
+    const colors = this.colorsView ?? {};
     const color = colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
     const pr = this.prFor(g);
@@ -650,6 +652,9 @@ export default class Spaces extends View {
     const card = sid ? (this.cardsView ??= shared("github-spaces.comments") ?? {})[sid] : null;
     const closed = new Set(card ? (card.dismissedIds ?? (card.dismissed ? (card.comments ?? []).map(c => c.id) : [])) : []);
     const count = (pr.attentionIds ?? []).filter(i => !closed.has(i)).length;
+    // Nothing pending but the PR has discussion: show the history dimmed. A
+    // commit clears the count that needs you, not the fact that people talked.
+    const history = Math.max(0, (pr.commentsTotal ?? 0) - closed.size);
     return h_flex().id(`pr-${pr.number}`).gap(4).items_center().flex_none()
       .tooltip(`PR #${pr.number} · ${look[2]}`)
       .child(svg(status === "conflict" ? "mods/spaces-stacks/conflict.svg" : `mods/workspace-chrome/${look[0]}.svg`)
@@ -666,7 +671,11 @@ export default class Spaces extends View {
       .when(count > 0, el => el.child(h_flex().gap(2).items_center().flex_none().text_color(t.accent)
         .tooltip(`${count} human comments need attention`)
         .child(svg("mods/spaces-stacks/comment.svg").size(12).flex_none())
-        .child(div().text_size(10).font_bold().child(String(count)))));
+        .child(div().text_size(10).font_bold().child(String(count)))))
+      .when(count === 0 && history > 0, el => el.child(h_flex().gap(2).items_center().flex_none().text_color(t.dim)
+        .tooltip(`${history} human comments · none pending`)
+        .child(svg("mods/spaces-stacks/comment.svg").size(12).flex_none())
+        .child(div().text_size(10).child(String(history)))));
   }
 
   // Ask github-spaces to resolve every branch in this repo again. One repo at a
@@ -847,15 +856,16 @@ export default class Spaces extends View {
   }
 
 
-  render() {
-    if (props()?.role === "branches") return this.renderBranches();
-    const t = theme();
-    const collapsed = narrow();
+  // One color per space, the theme color fewest spaces use. Written from a timer,
+  // never from render: a write re-renders every mod, and doing that from inside a
+  // render re-enters the host's renderer.
+  colorize() {
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();
     const ids = new Set(sp.map(p => p.id));
-    const kept = Object.fromEntries(Object.entries(shared("space.colors") ?? {}).filter(([id]) => ids.has(id)));
-    let changed = Object.keys(kept).length !== Object.keys(shared("space.colors") ?? {}).length;
+    const all = shared("space.colors") ?? {};
+    const kept = Object.fromEntries(Object.entries(all).filter(([id]) => ids.has(id)));
+    let changed = Object.keys(kept).length !== Object.keys(all).length;
     for (const p of sp) {
       if (kept[p.id] || p.name === "~") continue;
       const uses = c => Object.values(kept).filter(v => v === c).length;
@@ -863,6 +873,13 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
+  }
+
+  render() {
+    if (props()?.role === "branches") return this.renderBranches();
+    const t = theme();
+    const collapsed = narrow();
+    const sp = spaces();
     const list = this.grouped(t, collapsed);
     // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
     const active = sp.find(p => p.active)?.id;
