@@ -309,9 +309,10 @@ async function main() {
     refreshAsked = 0; view.asking = new Set();
     tasks.length = 0; view.refreshRepo('fixture', cx); await settle();
     assert.equal(refreshAsked, 1, 'a second on-demand refresh asks again instead of throttling');
+    assert.equal(toasts.at(-1).title, 'PR status refreshed', 'a refresh reports its outcome');
     delete view.git[otherKey];
     githubResponse = gh;
-    assert.equal(toasts.at(-1).timeout, 15000, 'comment toasts stay up for 15 seconds');
+    assert.equal(toasts.filter(t => t.title.startsWith('PR #')).at(-1).timeout, 15000, 'comment toasts stay up for 15 seconds');
     // A reload forgets what it saw: a comment that arrived meanwhile still notifies, once.
     view.prSeen.delete(key);
     fixture.comments.push(comment(14, '2026-11-03T17:00:00Z'));
@@ -414,9 +415,11 @@ async function main() {
     let restLists = 0, numberBatches = 0;
     githubResponse = args => {
       if (args[0] === 'api' && args.some(a => String(a).includes('/pulls?state=all'))) {
+        // gh 2.96 rejects --slurp without --paginate; a single page is enough here.
+        if (args.includes('--slurp') && !args.includes('--paginate')) return { code: 1, stderr: '`--paginate` required when passing `--slurp`' };
         restLists++;
-        return { code: 0, stdout: JSON.stringify([[{ number: 1063, html_url: url1063, state: 'open',
-          head: { ref: 'feature' }, updated_at: '2026-11-03T09:00:00Z' }]]) };
+        return { code: 0, stdout: JSON.stringify([{ number: 1063, html_url: url1063, state: 'open',
+          head: { ref: 'feature' }, updated_at: '2026-11-03T09:00:00Z' }]) };
       }
       if (isBatch(args)) { numberBatches++; return { code: 0, stdout: batchAnswer({ p1063: node({ baseRefName: 'main' }) }) }; }
       return realGh(args);
@@ -431,9 +434,24 @@ async function main() {
     // An empty page (fewer than 100 PRs) means this branch has no PR.
     view.pr = {}; view.prNum = {}; view.asking = new Set(); view.lastPrs = undefined; view.published = null;
     githubResponse = args => (args[0] === 'api' && args.some(a => String(a).includes('/pulls?state=all')))
-      ? { code: 0, stdout: JSON.stringify([[]]) } : realGh(args);
+      ? { code: 0, stdout: JSON.stringify([]) } : realGh(args);
     tasks.length = 0; view.pollPRs(cx); await settle();
     assert.equal(view.pr[key], null, 'a short page clears the mark for a branch with no PR');
+    // A broken discovery call still falls back to one lookup per branch now: the
+    // backoff it sets must not skip the fallback it exists for.
+    view.pr = {}; view.prNum = {}; view.asking = new Set(); view.tries = {}; view.retry = {};
+    let lookups = 0;
+    githubResponse = args => {
+      if (args[0] === 'api' && args.some(a => String(a).includes('/pulls?state=all'))) return { code: 1, stderr: 'boom' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        lookups++;
+        return { code: 0, stdout: JSON.stringify({ ...node({ baseRefName: 'main' }), commits: [{ committedDate: '2026-11-03T09:00:00Z' }] }) };
+      }
+      return realGh(args);
+    };
+    tasks.length = 0; view.pollPRs(cx); await settle();
+    assert.equal(lookups, 1, 'a failed REST discovery still looks the branch up immediately');
+    assert.equal(view.pr[key]?.number, 1063, 'and the fallback publishes the mark');
     githubResponse = realGh;
     console.log('PASS a branch absent from a short REST page has no PR');
 

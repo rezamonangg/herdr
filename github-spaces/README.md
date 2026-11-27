@@ -86,7 +86,7 @@ Add five `floating` entries (slot 0–4) to the work-area block in your personal
 
 ## Refresh one repo
 
-There is no global refresh key. The sidebar's repo row has a **↻** control beside the fetch arrow: it asks this mod to resolve every branch in that repository again, ignoring the two-minute cycle, the 30-second throttle and the cached PR numbers. Other repos are untouched. Press it as often as you like; a refused refresh (budget paused) shows a toast and changes nothing.
+There is no global refresh key. The sidebar's repo row has a **↻** control beside the fetch arrow: it asks this mod to resolve every branch in that repository again, ignoring the two-minute cycle, the 30-second throttle and the cached PR numbers. Other repos are untouched. Press it as often as you like; a refused refresh (budget paused) shows a toast and changes nothing. When the answers land it toasts how many marks moved (or that all were already current), and branches that failed to answer are named as such instead of disappearing.
 
 Under the hood the sidebar writes `shared("github-spaces.want") = { repo, at }` and this mod's one-second check picks it up.
 

@@ -91,7 +91,7 @@ Kept from the shipped sidebar: selection, drag-to-reorder, right-click menu, mac
 
 The download-arrow button beside each repo's name runs `git fetch` then `git rebase` against the branch's configured upstream, and is red with a count while strictly behind. It never pushes, resolves conflicts or aborts.
 
-The **↻** button on a repo's top row asks GitHub for every branch in that repository again — all its worktrees, marks and counts — not just the branch you clicked. It spins for a moment; the marks move when the answer lands. There is no global refresh key. A paused budget answers with a toast instead.
+The **↻** button on a repo's top row asks GitHub for every branch in that repository again — all its worktrees, marks and counts — not just the branch you clicked. It spins until the answer lands, and a toast says how many marks moved (or that nothing had changed). There is no global refresh key. A paused budget answers with a toast instead.
 
 ## Limits
 

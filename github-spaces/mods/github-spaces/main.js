@@ -130,7 +130,10 @@ export default class GitHubInfo extends View {
     this.login = null; // gh account, so own comments don't notify
     this.published = null; // the PR map as last written, so an unchanged poll writes nothing
     this.wroteAt = 0; // last shared write: answers arrive in bursts, renders cost more than the write
-    this.wantAt = 0; // the last on-demand repo refresh the sidebar asked for
+    // Seed from the saved request: a reload polls everything in sync() anyway,
+    // and re-consuming an old click would toast a refresh nobody asked for now.
+    this.wantAt = shared("github-spaces.want")?.at ?? 0; // the last on-demand repo refresh the sidebar asked for
+    this.reporting = null; // { repo, before }: a refresh still waiting on a branch
     cx.spawn(async (cx) => {
       try {
         const r = await exec("gh", ["api", "user", "--jq", ".login"]);
@@ -199,11 +202,39 @@ export default class GitHubInfo extends View {
       notify({ title: "GitHub paused", body: `Rate limit: PR marks resume ${new Date(this.holdUntil).toISOString().slice(11, 16)} UTC.`, level: "warning", timeout: 8000 });
       return;
     }
+    const before = this.lastPrs ?? shared("github-spaces.prs") ?? {};
     for (const [key, g] of Object.entries(this.git)) {
       if (g.repo !== repo) continue;
       delete this.polled[key]; delete this.retry[key]; delete this.tries[key];
     }
+    this.reporting = { repo, before }; // the sidebar's glyph cannot know when the answer lands
     this.pollPRs(cx, (k) => this.git[k]?.repo === repo);
+    this.report(); // nothing to ask: report now
+  }
+
+  // The marks only move when GitHub moved, so a refresh that finds nothing new
+  // looks dead; say which happened. The last in-flight job of the repo reports.
+  report() {
+    const r = this.reporting;
+    if (!r || [...this.asking].some((k) => this.git[k]?.repo === r.repo)) return;
+    this.reporting = null;
+    const checkouts = Object.entries(this.git).filter(([, g]) => g.repo === r.repo);
+    if (!checkouts.length) return;
+    const failed = checkouts.filter(([key]) => key in this.tries).length;
+    if (failed) {
+      notify({ title: "PR status not refreshed", body: `${failed} of ${checkouts.length} could not be asked; retrying.`, level: "error", timeout: 8000 });
+      return;
+    }
+    const after = this.lastPrs ?? shared("github-spaces.prs") ?? {};
+    const changed = checkouts.filter(([, g]) => {
+      const k = `${g.repo}|${g.branch}`;
+      return JSON.stringify(r.before[k]) !== JSON.stringify(after[k]);
+    }).length;
+    notify({
+      title: "PR status refreshed",
+      body: changed ? `${changed} of ${checkouts.length} updated.` : `${checkouts.length} already current.`,
+      level: "info", timeout: 4000,
+    });
   }
 
   checkWant(cx) {
@@ -282,7 +313,7 @@ export default class GitHubInfo extends View {
         this.fail(jobs, e);
         // A broken batch costs one cycle, not every mark in the repo.
         if (Date.now() < this.holdUntil) return;
-        for (const j of jobs) { delete this.prNum[j.key]; if (this.canAsk(j)) await this.lookup(j); }
+        for (const j of jobs) { delete this.prNum[j.key]; delete this.retry[j.key]; if (this.canAsk(j)) await this.lookup(j); }
       } finally {
         for (const j of jobs) this.markDone(j.key);
         cx.notify();
@@ -302,10 +333,10 @@ export default class GitHubInfo extends View {
     cx.spawn(async (cx) => {
       try {
         const r = await exec("gh", ["api", "--hostname", "github.com",
-          `repos/${owner}/${name}/pulls?state=all&per_page=100&sort=updated&direction=desc`, "--slurp"], { on: group.on });
+          `repos/${owner}/${name}/pulls?state=all&per_page=100&sort=updated&direction=desc`], { on: group.on });
         if (r.code !== 0) throw new Error(r.stderr || "gh api failed");
-        const pages = JSON.parse(r.stdout);
-        const prs = (Array.isArray(pages) ? pages : [pages]).flat();
+        const page = JSON.parse(r.stdout);
+        const prs = (Array.isArray(page) ? page : [page]).flat();
         const full = prs.length >= 100; // more PRs than one page: absence proves nothing
         const found = [];
         for (const j of jobs) {
@@ -326,7 +357,9 @@ export default class GitHubInfo extends View {
       } catch (e) {
         this.fail(jobs, e);
         if (Date.now() < this.holdUntil) return;
-        for (const j of jobs) if (this.canAsk(j)) await this.lookup(j);
+        // A failed batch must not wait on the backoff it just set: the fallback
+        // is the point of the catch, so clear it for these branches first.
+        for (const j of jobs) { delete this.retry[j.key]; if (this.canAsk(j)) await this.lookup(j); }
       } finally {
         for (const j of jobs) this.markDone(j.key);
         cx.notify();
@@ -385,6 +418,7 @@ export default class GitHubInfo extends View {
   markDone(key) {
     this.asking.delete(key);
     if (this.askingAt) delete this.askingAt[key];
+    this.report();
   }
 
   // A gh call that never finished (a dropped task, a reload) must not stop this

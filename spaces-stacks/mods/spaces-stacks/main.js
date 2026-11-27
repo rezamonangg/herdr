@@ -746,7 +746,9 @@ export default class Spaces extends View {
       .on_click((_e, cx) => { cx.stop_propagation(); this.refreshPRs(g, cx); })
       .hover(s => s.bg(t.hover))
       .tooltip("Refresh this repo's PR status")
-      .child(div().text_size(13).text_color(busy ? t.accent : t.muted).child("\u21bb"));
+      .child(busy
+        ? svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.accent).spin(900)
+        : div().text_size(13).text_color(t.muted).child("\u21bb"));
   }
 
   refreshPRs(g, cx) {
@@ -939,11 +941,12 @@ export default class Spaces extends View {
     const collapsed = narrow();
     const sp = spaces();
     const list = this.grouped(t, collapsed);
-    // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
+    // Bring the active space into view when it changes — not when its index does:
+    // a PR refresh re-nests rows above it, and following the index yanks the list
+    // away from whatever the person scrolled up to.
     const active = sp.find(p => p.active)?.id;
-    if (active !== this.revealed || this.activeAt !== this.revealedAt) {
+    if (active !== this.revealed) {
       this.revealed = active;
-      this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
@@ -956,7 +959,12 @@ export default class Spaces extends View {
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
-        .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
+        // The host reports a size change on every re-layout, height unchanged; only a real resize may move the list.
+        .on_size_change((size, cx) => {
+          if (this.listHeight === size?.height) return;
+          this.listHeight = size?.height;
+          if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); }
+        })
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
         .children(list));
   }

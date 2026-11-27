@@ -101,6 +101,15 @@ async function main() {
     assert.deepEqual([...rows.filter(r => r.root).map(r => r.w.id)], ['main'], 'one repo, one refresh control');
     console.log('PASS stack depth follows the PR base branch');
 
+    // The refresh control asks for this repo, then spins until the answer lands.
+    const control = () => view.row(by('main'), t).items[0].items.find(c => c.id === 'prr-main');
+    const busyTimers = [];
+    control().events.on_click({}, { stop_propagation() {}, notify() {}, timer: { after(ms) { busyTimers.push(ms); } } });
+    assert.equal(storage.get('github-spaces.want')?.repo, repo, 'the refresh control asks for its own repo');
+    assert.deepEqual(busyTimers, [2500], 'and marks the glyph busy on a timer');
+    assert.ok(control().items[0].kind.endsWith('/spinner.svg'), 'the glyph spins while it waits');
+    console.log('PASS refresh control asks for its repo and spins');
+
     // --- a parent row folds its subtree; the order and the rail keep every row ---
     assert.deepEqual([...rows.map(r => [r.w.id, r.kids])],
       [['main', true], ['a', true], ['b', false], ['c', false]],
@@ -154,6 +163,39 @@ async function main() {
     console.log('PASS a stack folds from its parent row and is remembered');
     moves.length = 0; // the fold clicks above selected spaces; below is about ordering moves
 
+    // Reveal only when the active space itself changes: a refresh that re-nests
+    // rows above it must leave the list where the person put it.
+    const scrolled = [];
+    view.scroll = { scroll_to_item: (i) => scrolled.push(i) };
+    view.revealed = undefined;
+    view.ordering = null;
+    spaces.forEach(s => delete s.active);
+    spaces.find(s => s.id === 'c').active = true;
+    view.foldedSpaces = new Set();
+    view.render();
+    assert.deepEqual([...scrolled], [view.activeAt], 'the first draw reveals the active space');
+    scrolled.length = 0;
+    view.foldedSpaces = new Set(['a']); // its own row and that subtree move up: same active space
+    view.render();
+    assert.deepEqual([...scrolled], [], 'a row shift above the active space keeps the list still');
+    view.foldedSpaces = new Set();
+    spaces.find(s => s.id === 'c').active = false;
+    spaces.find(s => s.id === 'b').active = true;
+    view.render();
+    assert.deepEqual([...scrolled], [view.activeAt], 'switching space still reveals it');
+    console.log('PASS the list reveals a switched space, not a shifted one');
+
+    // A re-render reports a size even when the list did not change size; that
+    // must not move it, or every shared write yanks the list back to the active row.
+    scrolled.length = 0;
+    const listEl = view.render().items[1];
+    assert.equal(typeof listEl.events.on_size_change, 'function', 'the list reports its size');
+    listEl.events.on_size_change({ height: 453 }, { notify() {} });
+    listEl.events.on_size_change({ height: 453 }, { notify() {} });
+    assert.equal(scrolled.length, 1, 'the same height is not a resize');
+    listEl.events.on_size_change({ height: 300 }, { notify() {} });
+    assert.equal(scrolled.length, 2, 'a real resize still reveals the active space');
+    console.log('PASS only a real resize moves the list');
 
     // The sidebar hands github-spaces the checkouts it knows, spaces included.
     view.publish();
