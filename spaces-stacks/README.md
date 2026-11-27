@@ -64,7 +64,9 @@ GitHub Spaces        main  ↓2
 - No PR on the branch, or a base branch with no space here → direct child of the main checkout.
 - A repo with no main checkout space roots the tree at each worktree whose parent is not among the spaces; a worktree whose base is another worktree here still nests under it.
 - Two PRs retargeted at each other cannot loop: each space appears once.
-- Indentation only. Hover a mark for its PR number and status.
+- Clicking a row with worktrees under it selects that space and folds or unfolds its subtree; its trailing chevron does the same without switching. Leaf rows only select. Folds are remembered per space and survive reloads.
+- A folded row keeps its line; its hidden worktrees are still reordered, polled and counted as usual. The compact rail ignores folds and lists every space.
+- Hover a mark for its PR number and status.
 
 Nesting is as fresh as the last poll (two minutes, or the repo row's **↻** control). A retargeted PR moves one cycle later.
 
@@ -95,6 +97,8 @@ The **↻** button on a repo's top row asks GitHub for every branch in that repo
 
 - **No PR marks or marks that lag:** the info mod polls every two minutes. Check `gh pr view` in the checkout and `gh auth status`; see the [GitHub Spaces README](../github-spaces/README.md#limits-and-troubleshooting).
 - **Stacks need PRs.** Without a PR, a worktree is flat under its main checkout; local commit ancestry is not guessed.
+- **A parent row toggles on every click.** Switching to a repo or worktree that has a stack folds or unfolds it too; the chevron folds without switching.
+- **A folded stack hides its rows.** If the active space is inside it, the space stays selected but its row is out of view until you unfold; nothing scrolls to it.
 - **Branch counts** are Git's, against the last fetched upstream — not the PR's base branch.
 - **A space named exactly after its branch** hides the branch label, so it offers no switcher there.
 
@@ -102,7 +106,7 @@ This is trusted code: it runs `git rev-parse`, `git rev-list`, `git fetch`/`reba
 
 ## Development
 
-`main.js` starts from a copy of Herdr's shipped `spaces` mod; never edit the shipped original. The added paths are `ordered()` (the forest), `prFor()`/`prMark()` (marks from shared state), `fetchButton()`/`fetchRebase()`, and the `branches` role (`initBranches`, `pick`, `spaceOn`).
+`main.js` starts from a copy of Herdr's shipped `spaces` mod; never edit the shipped original. The added paths are `ordered()` (the forest), `prFor()`/`prMark()` (marks from shared state), `fetchButton()`/`fetchRebase()`, `opened()`/`foldButton()` (folded stacks), and the `branches` role (`initBranches`, `pick`, `spaceOn`).
 
 From the repository root:
 
@@ -113,7 +117,7 @@ git diff --check
 herdr-app check ~/.config/herdr-app/mods/spaces-stacks
 ```
 
-The stacks check covers stack depth from PR bases, unknown bases, missing main checkouts, retargeted cycles, marks from published data, dismissed badges, and Git ahead/behind arrows. It does not cover the live popup; exercise the picker and a two-deep stack in the real sidebar.
+The stacks check covers stack depth from PR bases, unknown bases, missing main checkouts, retargeted cycles, folding a parent row (subtree hidden, order untouched, fold remembered and cleaned up, hidden active space not scrolled to), marks from published data, dismissed badges, and Git ahead/behind arrows. It does not cover the live popup or real click targets; exercise the picker, a chevron, and a two-deep stack in the real sidebar.
 
 ### Shared state
 

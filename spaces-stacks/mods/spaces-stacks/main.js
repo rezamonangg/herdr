@@ -122,6 +122,7 @@ export default class Spaces extends View {
       for (const state of Object.values(this.reconnecting)) state.busy = false;
     } catch { this.reconnecting = {}; }
     try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
+    this.loadFolds();
     this.colorize();
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
@@ -137,6 +138,7 @@ export default class Spaces extends View {
   checkNew(cx) {
     const now = Date.now();
     const sp = spaces();
+    this.pruneFolds();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
@@ -412,6 +414,8 @@ export default class Spaces extends View {
     };
     for (const r of list) if (!parent.get(r)) visit(r, 0);
     for (const r of list) if (!seen.has(r)) visit(r, 0);
+    // Depth-first order nests, so a row has children when the next one is deeper.
+    for (let i = 0; i < out.length; i++) out[i].kids = (out[i + 1]?.depth ?? -1) > out[i].depth;
     // Simulate the batch so later indexes include earlier moves. An attempted
     // write can lose a sync conflict: allow the echo to settle before retrying.
     const order = sp.map(w => w.id);
@@ -434,9 +438,47 @@ export default class Spaces extends View {
     return out.filter(r => this.shown.has(r.w.id));
   }
 
+  // Folded stack subtrees, per space id rather than per tree position: a
+  // retarget that moves a row keeps its fold, and a fold with no children
+  // today is inert until the next poll gives it some.
+  loadFolds() {
+    try { this.foldedSpaces = new Set(JSON.parse(localStorage.getItem("spaces-stacks.folded") ?? "[]")); } catch { this.foldedSpaces = new Set(); }
+  }
+
+  saveFolds() {
+    localStorage.setItem("spaces-stacks.folded", JSON.stringify([...this.foldedSpaces]));
+  }
+
+  toggleFold(id, cx) {
+    this.foldedSpaces.has(id) ? this.foldedSpaces.delete(id) : this.foldedSpaces.add(id);
+    this.saveFolds();
+    cx.notify();
+  }
+
+  // Forget folds for spaces that are gone, once every machine's layout is in:
+  // an offline machine's spaces are missing from spaces(), not deleted.
+  pruneFolds() {
+    if (!this.foldedSpaces?.size || !machines().every(m => m.layout === "ready")) return;
+    const ids = new Set(spaces().map(s => s.id));
+    let changed = false;
+    for (const id of [...this.foldedSpaces]) if (!ids.has(id)) { this.foldedSpaces.delete(id); changed = true; }
+    if (changed) this.saveFolds();
+  }
+
+  // What the list draws: a folded row keeps its line and its deeper rows go.
+  // Only the drawn list is shorter; ordering and the compact rail see every row.
+  opened(rows) {
+    let cut = Infinity;
+    return rows.filter(r => {
+      if (r.depth > cut) return false;
+      cut = r.kids && this.foldedSpaces?.has(r.w.id) ? r.depth : Infinity;
+      return true;
+    });
+  }
+
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered();
+    const rows = collapsed ? this.ordered() : this.opened(this.ordered());
     const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
@@ -555,7 +597,7 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  row({ w, i, g, depth, root }, t) {
+  row({ w, i, g, depth, root, kids }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = this.colorsView ?? {};
@@ -598,7 +640,10 @@ export default class Spaces extends View {
         if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+        } else if (from === w.id) {
+          run("space.select", { id: w.id });
+          if (kids) this.toggleFold(w.id, cx);
+        }
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w))
@@ -613,8 +658,21 @@ export default class Spaces extends View {
           .when(!(depth > 0) && pr?.state === "OPEN", el => el.child(this.prMark(pr, t, w.id)))
           .when(Boolean(g), el => el.child(this.fetchButton(w, g, t)))
           .when(Boolean(root) && Boolean(g?.branch), el => el.child(this.refreshButton(w, g, t)))
-          .child(g ? this.gitTail(g, depth, w.name, t, w) : div().flex_1()),
+          .child(g ? this.gitTail(g, depth, w.name, t, w) : div().flex_1())
+          .when(Boolean(kids), el => el.child(this.foldButton(w, t))),
       );
+  }
+
+  // The stack chevron, trailing like the machine headers so no row re-indents.
+  // Its mouse-down is stopped, or the row would start a drag or select instead.
+  foldButton(w, t) {
+    const folded = this.foldedSpaces?.has(w.id);
+    return h_flex().id(`fold-${w.id}`).flex_none().items_center().justify_center().size(16).rounded(4).cursor_pointer()
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); this.toggleFold(w.id, cx); })
+      .hover(s => s.bg(t.hover))
+      .tooltip(folded ? "Show stacked worktrees" : "Hide stacked worktrees")
+      .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none().text_color(t.dim));
   }
 
   compact({ w, i }, t) {

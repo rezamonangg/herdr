@@ -7,7 +7,7 @@ const vm = require('node:vm');
 
 // Record native builder output without needing a running Herdr window.
 function element(kind) {
-  const node = { kind, items: [] };
+  const node = { kind, items: [], events: {} };
   let proxy;
   proxy = new Proxy(node, {
     get(target, key) {
@@ -19,7 +19,8 @@ function element(kind) {
           target.items.push(args[0]);
         } else if (key === 'children') {
           target.items.push(...args[0]);
-        } else target[key] = args[0];
+        } else if (key.startsWith('on_')) target.events[key] = args[args.length - 1];
+        else if (args.length === 1 && typeof args[0] !== 'function') target[key] = args[0];
         return proxy;
       };
     },
@@ -43,6 +44,7 @@ async function main() {
   };
   try {
     const storage = new Map();
+    const saved = new Map();
     const moves = [];
     const source = fs.readFileSync(path.join(__dirname, 'mods/spaces-stacks/main.js'), 'utf8')
       .replace(/^import .*;$/gm, '').replace(/export default class /, 'class ').replace(/^export /gm, '');
@@ -55,12 +57,13 @@ async function main() {
       run: (name, args) => { moves.push([name, args]); return null; },
       notify: () => null, theme: () => ({}), machines: () => [], window: () => ({ active: false }),
       spaces: () => spaces, panes: () => [], layout: () => null, props: () => ({}), closeOverlay: () => null,
-      localStorage: { setItem() {}, getItem: () => null },
+      localStorage: { setItem: (k, v) => saved.set(k, String(v)), getItem: (k) => saved.get(k) ?? null },
     }, { timeout: 1000 });
     const view = new Spaces();
     view.git = {}; view.checked = {}; view.unsure = new Set(); view.pending = new Set();
     view.busy = {}; view.ready = {}; view.at = {}; view.born = {}; view.machines = [];
-    view.folded = new Set(); view.reconnecting = {}; view.rebasing = {};
+    view.folded = new Set(); view.reconnecting = {}; view.rebasing = {}; view.foldedSpaces = new Set();
+    view.colorsView = {}; view.prsView = {}; view.cardsView = {};
     view.shown = new Set(spaces.map(s => s.id));
     view.publish = view.publish.bind(view);
 
@@ -97,6 +100,60 @@ async function main() {
       'a worktree nests under the worktree its PR targets, depth-first');
     assert.deepEqual([...rows.filter(r => r.root).map(r => r.w.id)], ['main'], 'one repo, one refresh control');
     console.log('PASS stack depth follows the PR base branch');
+
+    // --- a parent row folds its subtree; the order and the rail keep every row ---
+    assert.deepEqual([...rows.map(r => [r.w.id, r.kids])],
+      [['main', true], ['a', true], ['b', false], ['c', false]],
+      'a row has children when the next row in depth-first order is deeper');
+    view.foldedSpaces = new Set(['a']);
+    assert.deepEqual([...view.opened(rows).map(r => r.w.id)], ['main', 'a', 'c'],
+      'a folded row keeps its line and hides its subtree');
+    view.foldedSpaces = new Set(['main']);
+    assert.deepEqual([...view.opened(rows).map(r => r.w.id)], ['main'], 'folding the root hides the repo tree');
+    view.foldedSpaces = new Set(['main', 'a']);
+    view.foldedSpaces.delete('main');
+    assert.deepEqual([...view.opened(rows).map(r => r.w.id)], ['main', 'a', 'c'], 'unfolding a parent keeps a nested fold');
+    view.foldedSpaces = new Set();
+    const parentRow = view.row(by('main'), t);
+    const leafRow = view.row(by('b'), t);
+    const chevron = (row) => row.items[0].items.find(c => c.id === 'fold-main');
+    assert.ok(chevron(parentRow), 'a parent row carries the fold chevron');
+    assert.ok(!leafRow.items[0].items.some(c => c.id?.startsWith?.('fold-')), 'a leaf row has none');
+    const before = moves.length;
+    chevron(parentRow).events.on_click({}, { stop_propagation() {}, notify() {} });
+    assert.deepEqual([...view.foldedSpaces], ['main'], 'the chevron folds the subtree');
+    assert.equal(saved.get('spaces-stacks.folded'), '["main"]', 'the fold is remembered');
+    assert.deepEqual([...moves.slice(before)], [], 'folding neither selects nor moves a space');
+    // The row itself does both: select it and fold its subtree.
+    view.foldedSpaces = new Set();
+    view.pressed = 'main'; view.over = 'main';
+    const clickCx = { stop_propagation() {}, notify() {} };
+    const rowMark = moves.length;
+    view.row(by('main'), t).events.on_mouse_up({}, clickCx);
+    assert.deepEqual([...view.foldedSpaces], ['main'], 'a click on the parent row folds the subtree');
+    assert.deepEqual([...moves.slice(rowMark).map(([name]) => name)], ['space.select'], 'and it still selects the space');
+    view.pressed = 'b'; view.over = 'b';
+    const leafMark = moves.length;
+    view.row(by('b'), t).events.on_mouse_up({}, clickCx);
+    assert.deepEqual([...view.foldedSpaces], ['main'], 'a leaf click leaves folds alone');
+    assert.deepEqual([...moves.slice(leafMark).map(([name]) => name)], ['space.select'], 'a leaf click still selects');
+    view.foldedSpaces = new Set();
+    view.loadFolds();
+    assert.deepEqual([...view.foldedSpaces], ['main'], 'folds come back after a reload');
+    view.foldedSpaces = new Set(['a', 'gone']);
+    view.pruneFolds();
+    assert.deepEqual([...view.foldedSpaces], ['a'], 'a fold for a space that is gone is forgotten');
+    view.foldedSpaces = new Set(['a']);
+    spaces.find(s => s.id === 'b').active = true;
+    view.grouped(t, false);
+    assert.equal(view.activeAt, -1, 'an active space inside a folded subtree is not drawn or scrolled to');
+    view.foldedSpaces = new Set();
+    view.grouped(t, false);
+    assert.equal(view.activeAt, 2, 'unfolding draws it again');
+    delete spaces.find(s => s.id === 'b').active;
+    console.log('PASS a stack folds from its parent row and is remembered');
+    moves.length = 0; // the fold clicks above selected spaces; below is about ordering moves
+
 
     // The sidebar hands github-spaces the checkouts it knows, spaces included.
     view.publish();
